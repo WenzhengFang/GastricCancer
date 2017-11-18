@@ -14,9 +14,9 @@ from pprint import pprint
 #         store the content of sample info table, which include patientID, sampleID, tumor type and so on
 #     pathology_content: 2d array or 2d matrix like, which include patientID, pathology type of WHO and lauren, differentiation type
 # Methods:
-#     originOfSample: Return map table of tissue type with sampleID, to check which tissue the sample are from 
+#     originOfSample: Return map table of tissue type with sampleID, to check which tissue the sample are from
 #     patient_with_sample: Return map table of sample with patientID, for the handling to different samples of one patient
-#     patient_id_capture: store all patient id in array, which is the main index for connecting the pathology type with mutation information 
+#     patient_id_capture: store all patient id in array, which is the main index for connecting the pathology type with mutation information
 #     patient_pathologytype: transfer the real pathology type signs to standard label
 class PrioriExtract(object):
     def __init__(self, sample_info_filePath, pathology_type_filePath):
@@ -102,8 +102,8 @@ class PrioriExtract(object):
 #     patient_pathInfo: dict, with patientID as keys and pathology types as values
 #     sample_with_path: dict, with sampleID as keys and sample fastq file path as values, for detecting the mutation analysis result.
 # Methods:
-#     filePath_obtain: search the result directory to seek the unique mutation analysis result, to make map table of sampleID with mutation result path. 
-#     path_from_patient: return the mutation analysis result path by patientID 
+#     filePath_obtain: search the result directory to seek the unique mutation analysis result, to make map table of sampleID with mutation result path.
+#     path_from_patient: return the mutation analysis result path by patientID
 #     filter_demo: demo routine for mutation filter, seek in the result directory and construct the connection of patientID and mutation file, then screen the gene mutation for each patient in accordance with filter standard.
 #     filter_mutation: formal routine for mutation filter, then merge the mutation information with labels, seek in the result directory and construct the connection of patientID and mutation file, then screen the gene mutation for each patient in accordance with filter standard.
 #     snvIndel_mut_filter: give a mutation analysis result, decide whether it belongs to blood sample of tissue sample, then filter the mutation gene with specific rules.
@@ -260,8 +260,9 @@ class Preprocess(PrioriExtract):
                     if (10 < int(line[5]) + int(line[6]) and 3 <= int(line[6]) and sample_tissue == "fresh tissue") or \
                             (10 < int(line[5]) + int(line[6]) and 1 < int(line[6]) and sample_tissue == "blood"):
                         flag = True
-                    if flag and \
-                            float(line[12]) <= 0.05 and \
+                    if sample_tissue == "fresh tissue" and \
+                            10 < int(line[5]) + int(line[6]) and 3 <= int(line[6]) and \
+                            float(line[12]) <= 1 and \
                             line[23] not in ["UNKNOWN", ""] and \
                             line[24] not in ["UNKNOWN", ""] and \
                             line[25] not in ["UNKNOWN", ""] and \
@@ -270,7 +271,11 @@ class Preprocess(PrioriExtract):
                             line[32] == "" and line[35] == "" and \
                             (line[37] == "" or (line[37] != "" and line[64] != "")):
                         filter_data.append(line[:5] + [line[21]] + line[23:30])
-                        # for gene in line[28].split(","):
+                    if sample_tissue == "blood" and \
+                             10 < int(line[5]) + int(line[6]) and 1 < int(line[6]) and \
+                             float(line[12]) <= 1:
+                        filter_data.append(line[:5] + [line[21]] + line[23:30])
+                            # for gene in line[28].split(","):
                         #     if gene:
                         #         geneSet.add(gene)
         # with open(filterFile, "w") as f2:
@@ -306,7 +311,7 @@ if __name__ == "__main__":
     # sampleProcess.filePath_obtain(result_path)
     # print(sampleProcess.snvIndel_mut_filter(quantifyFile))
     # print(sampleProcess.path_from_patient("211421"))
-    sampleProcess.filter_mutation(52, result_path, outputDir)
+    sampleProcess.filter_mutation(67, result_path, outputDir)
     # pprint(pe.patient_pathologytype())
 
 

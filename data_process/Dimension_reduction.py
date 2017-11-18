@@ -1,0 +1,179 @@
+# -*- coding = utf-8 =_=
+
+__author__ = '15624959453@163.com'
+
+import os
+import sys
+import Tools.IO as IO
+
+# import graphviz
+import numpy as np
+from sklearn import datasets
+from sklearn import feature_selection
+from sklearn.decomposition import PCA, IncrementalPCA, KernelPCA, LatentDirichletAllocation
+import matplotlib.pyplot as plt
+
+class entropy_cal(object):
+
+    def infoEntropy(self, x):
+        """
+            calculate information entropy H(x)
+        """
+        x_value_list = set([x[i] for i in range(x.shape[0])])
+        ent = 0.0
+        for x_value in x_value_list:
+            p = float(x[x == x_value].shape[0]) / x.shape[0]
+            logp = np.log2(p)
+            ent -= p * logp
+        return ent
+
+    def condEntropy(self, x, y):
+        """
+            calculate ent H(y|x)
+        """
+        x_value_list = set([x[i] for i in range(x.shape[0])])
+        ent = 0.0
+        for x_value in x_value_list:
+            sub_y = y[x == x_value]
+            temp_ent = self.infoEntropy(sub_y)
+            ent += (float(sub_y.shape[0]) / y.shape[0]) * temp_ent
+        return ent
+
+    def infomationGain(self, x, y):
+        y_np = np.array(y)
+        base_ent = self.infoEntropy(y_np)
+        condition_ent = self.condEntropy(x, y_np)
+        ent_grap = base_ent - condition_ent
+        return ent_grap
+
+class Feature_selection(object):
+    def __init__(self):
+        self.dataset = np.zeros((1))
+        self.labels = []
+        self.titles = []
+
+    def load_data(self, fileName):
+        matrix, labels, titles = [], [], []
+        with open(fileName, "r") as f1:
+            for lineno, line in enumerate(f1):
+                data_array = line.strip("\n").split("\t")
+                if lineno > 0:
+                    if data_array[-1]:
+                        labels.append(int(data_array[-1]))
+                        #         matrix.append([float(x) for x in data_array[:-1]])
+                        # else:
+                        #     titles = data_array[:-1]
+                        matrix.append([int(x) for x in data_array[1:-3]])
+                else:
+                    titles = data_array[1:-3]
+        self.dataset = np.array(matrix)
+        self.titles = np.array(titles)
+        self.labels = labels
+
+    def corrcoef_calculate(self, dataset, labels):
+        N, M = dataset.shape
+        content = np.zeros((N, M+1))
+        content[:, 0:M] = dataset
+        content[:, -1] = labels
+        corr_matrix = np.corrcoef(content, rowvar=0)
+        return corr_matrix[-1:, :-1]
+        # return corr_matrix
+
+    def infoGain_calculate(self, dataset, labels):
+        N, M = dataset.shape
+        ent, res = entropy_cal(), []
+        for i in range(M):
+            x = dataset[:, i]
+            res.append(ent.infomationGain(x, labels))
+        return res
+
+    def output_result(self, corr_matrix, dir):
+        corrcoef_file = os.path.join(dir, "corrcoef_of_muationAndPathology_1-78.table")
+        with open(corrcoef_file, "w") as f1:
+            for line in corr_matrix:
+                f1.write("\t".join(list(map(str, line))) + "\n")
+        return
+
+    def feature_select(self, dataset, titles, labels, thresh):
+        infoGainTable = np.array(self.infoGain_calculate(dataset, labels))
+        titles_np = titles
+        feature_select_index = infoGainTable >= thresh
+        feature_select_name = titles_np[feature_select_index]
+        filter_dataset = dataset[:, feature_select_index]
+        return filter_dataset, feature_select_name
+
+    def sec_feature_select(self, dataset, titles, feat_impor_file, top_counts):
+        matrix = IO.FileIO.readLists(feat_impor_file)
+        matrix_T = list(zip(*[[ele.split("(")[0] for ele in x] for x in matrix[1:top_counts+1]]))
+        common_set = set(matrix_T[0])
+        for rowByModel in matrix_T[1:]:
+            common_set &= set(rowByModel)
+        feature_select_index = [i for i in range(titles.shape[0]) if titles[i] in common_set]
+        filter_titles = titles[feature_select_index]
+        filter_dataset = dataset[:, feature_select_index]
+        return filter_dataset, filter_titles
+
+
+class Dimension_Reduce(object):
+
+    def dimReduction_pca(self, dataset, n_components):
+        pca = PCA(n_components = n_components)
+        dataset_pca = pca.fit_transform(dataset)
+        return dataset_pca
+
+    def dimReduction_ipca(self, dataset, n_components, batch_size):
+        ipca = IncrementalPCA(n_components=n_components, batch_size= batch_size)
+        dataset_ipca = ipca.fit_transform(dataset)
+        return dataset_ipca
+
+    def dimReduction_kpca(self, dataset, kernel, fit_inverse, gamma):
+        kpca = KernelPCA(kernel=kernel, fit_inverse_transform=fit_inverse, gamma=gamma)
+        dataset_kpca = kpca.fit_transform(dataset)
+        dataset_back = kpca.inverse_transform(dataset_kpca)
+        return dataset_kpca
+
+    def demo(self):
+        n, batch_size = 2, 10
+        iris = datasets.load_iris()
+        iris_data = iris.data
+        colors = ['navy', 'turquoise', 'darkorange']
+        X_pca = self.dimReduction_pca(iris_data, n)
+        X_ipca = self.dimReduction_ipca(iris_data, n, batch_size)
+        y = iris.target
+
+        for X_transformed, title in [(X_ipca, "Incremental PCA"), (X_pca, "PCA")]:
+            plt.figure(figsize=(8, 8))
+            for color, i, target_name in zip(colors, [0, 1, 2], iris.target_names):
+                plt.scatter(X_transformed[y == i, 0], X_transformed[y == i, 1],
+                            color=color, lw=2, label=target_name)
+
+            if "Incremental" in title:
+                err = np.abs(np.abs(X_pca) - np.abs(X_ipca)).mean()
+                plt.title(title + " of iris dataset\nMean absolute unsigned error "
+                                  "%.6f" % err)
+            else:
+                plt.title(title + " of iris dataset")
+            plt.legend(loc="best", shadow=False, scatterpoints=1)
+            plt.axis([-4, 4, -1.5, 1.5])
+
+        plt.show()
+
+
+if __name__ == "__main__":
+    # print(__doc__)
+    fileName = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\mutation_for_1-78.table"
+    output_dir = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\"
+
+    fs = Feature_selection()
+    fs.load_data(fileName)
+    info_gain_threshold = 0.075
+    a = fs.corrcoef_calculate(fs.dataset, fs.labels)
+    b = fs.infoGain_calculate(fs.dataset, fs.labels)
+    datasets_select, feature_selection = fs.feature_select(fs.dataset, fs.titles, fs.labels, info_gain_threshold)
+    # print(feature_selection)
+    gene_corr = [["gene", "Person_correlation", "Infomation_gain"]] + [[fs.titles[i], a[0, i], b[i]] for i in range(len(fs.titles))]
+    fs.output_result(gene_corr, output_dir)
+
+    # dr = Dimension_Reduce()
+    # dr.demo()
+
