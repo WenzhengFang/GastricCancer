@@ -1,10 +1,10 @@
-# -*- coding = utf-8 =_=
+﻿# -*- coding = utf-8 =_=
 
 __author__ = '15624959453@163.com'
 
 import os
 import sys
-import Tools.IO as IO
+#import Tools.IO as IO
 
 # import graphviz
 import numpy as np
@@ -103,13 +103,17 @@ class Feature_selection(object):
         return filter_dataset, feature_select_name
 
     def sec_feature_select(self, dataset, titles, feat_impor_file, top_counts):
-        matrix = IO.FileIO.readLists(feat_impor_file)
+        matrix = []
+	with open(feat_impor_file, "r") as f1:
+            for line in f1:
+		matrix.append(line.strip().split('\t'))
         matrix_T = list(zip(*[[ele.split("(")[0] for ele in x] for x in matrix[1:top_counts+1]]))
         common_set = set(matrix_T[0])
         for rowByModel in matrix_T[1:]:
             common_set &= set(rowByModel)
         feature_select_index = [i for i in range(titles.shape[0]) if titles[i] in common_set]
         filter_titles = titles[feature_select_index]
+	print(filter_titles)
         filter_dataset = dataset[:, feature_select_index]
         return filter_dataset, filter_titles
 
