@@ -109,7 +109,7 @@ class Feature_selection(object):
 		matrix.append(line.strip().split('\t'))
         matrix_T = list(zip(*[[ele.split("(")[0] for ele in x] for x in matrix[1:top_counts+1]]))
         common_set = set(matrix_T[0])
-        for rowByModel in matrix_T[1:]:
+        for rowByModel in matrix_T[1:2]:
             common_set &= set(rowByModel)
         feature_select_index = [i for i in range(titles.shape[0]) if titles[i] in common_set]
         filter_titles = titles[feature_select_index]

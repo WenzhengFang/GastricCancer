@@ -36,7 +36,7 @@ class Parameter(object):
     GBDT_n = 100
     GBDT_learnRate = 0.1
 
-    LR_C = 107
+    LR_C = 0.02
     LR_penalty = "l2"
     LR_solver = "liblinear" # Algorithm to use in the optimization problem ["liblinear",""]
     LR_tol = 0.001 # Tolerance for stopping criteria
@@ -480,7 +480,7 @@ if __name__ == "__main__":
     scores = ["accuracy"]
     test.dataset, test.titles = test.feature_reduction(test.dataset, test.titles, test.labels, threshold, mutation_sort_file)
     #test.dataset, test.titles = test.feature_reduction(test.dataset, test.titles, test.labels, threshold)
-    test.param_compare(tuned_parameters, test.dataset, test.labels, scores)
+    #test.param_compare(tuned_parameters, test.dataset, test.labels, scores)
     test.train(test.dataset, test.labels)
     test.evaluate(test.dataset, test.labels)
     #matrix.append(test.feature_select())
