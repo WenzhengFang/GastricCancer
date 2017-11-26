@@ -102,12 +102,20 @@ class Feature_selection(object):
         filter_dataset = dataset[:, feature_select_index]
         return filter_dataset, feature_select_name
 
-    def sec_feature_select(self, dataset, titles, feat_impor_file, top_counts):
+    def sec_feature_select(self, dataset, titles, feat_impor_file, top_counts, common_threshold):
         matrix = IO.FileIO.readLists(feat_impor_file)
-        matrix_T = list(zip(*[[ele.split("(")[0] for ele in x] for x in matrix[1:top_counts+1]]))
-        common_set = set(matrix_T[0])
-        for rowByModel in matrix_T[1:]:
-            common_set &= set(rowByModel)
+        matrix_T_clear = list(zip(*[[ele.split("(")[0] for ele in x] for x in matrix[1:top_counts+1]]))
+        total_gene_set = dict([[gene, 1] for gene in matrix_T_clear[0]])
+        common_set = set()
+        for rowByModel in matrix_T_clear[1:]:
+            for gene in rowByModel:
+                if gene in total_gene_set:
+                    total_gene_set[gene] += 1
+                else:
+                    total_gene_set[gene] = 1
+        for gene, counts in total_gene_set.items():
+            if counts >= common_threshold:
+                common_set.add(gene)
         feature_select_index = [i for i in range(titles.shape[0]) if titles[i] in common_set]
         filter_titles = titles[feature_select_index]
         filter_dataset = dataset[:, feature_select_index]
@@ -163,16 +171,20 @@ if __name__ == "__main__":
     # print(__doc__)
     fileName = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\mutation_for_1-78.table"
     output_dir = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\"
+    mutation_sort_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\mutation_importance\\mutation_importance_by_ml.txt"
 
     fs = Feature_selection()
     fs.load_data(fileName)
     info_gain_threshold = 0.075
     a = fs.corrcoef_calculate(fs.dataset, fs.labels)
     b = fs.infoGain_calculate(fs.dataset, fs.labels)
-    datasets_select, feature_selection = fs.feature_select(fs.dataset, fs.titles, fs.labels, info_gain_threshold)
+    # datasets_select, feature_selection = fs.feature_select(fs.dataset, fs.titles, fs.labels, info_gain_threshold)
     # print(feature_selection)
-    gene_corr = [["gene", "Person_correlation", "Infomation_gain"]] + [[fs.titles[i], a[0, i], b[i]] for i in range(len(fs.titles))]
-    fs.output_result(gene_corr, output_dir)
+    # gene_corr = [["gene", "Person_correlation", "Infomation_gain"]] + [[fs.titles[i], a[0, i], b[i]] for i in range(len(fs.titles))]
+    # fs.output_result(gene_corr, output_dir)
+
+    datasets_select, feature_selection = fs.sec_feature_select(fs.dataset, fs.titles, mutation_sort_file, 15, 3)
+
 
     # dr = Dimension_Reduce()
     # dr.demo()

@@ -5,9 +5,9 @@ import os
 import sys
 import re
 from Tools.IO import FileIO, DirIO
-os.environ["PATH"] += os.pathsep + 'C:/Program Files (x86)/Graphviz2.38/bin/'
-sys.append("../data_process/")
+from datetime import datetime
 
+os.environ["PATH"] += os.pathsep + 'C:/Program Files (x86)/Graphviz2.38/bin/'
 import numpy as np
 from xgboost.sklearn import XGBClassifier
 from sklearn import svm, linear_model, tree, neighbors, neural_network, ensemble, naive_bayes
@@ -19,34 +19,44 @@ import matplotlib.pyplot as plt
 import pydotplus
 
 class Parameter(object):
-    infoGain_thresh = 0.075
-    cross_cv = 3
-    top_gene_counts = 15
+    infoGain_thresh = 0.075  # Threshold of cross entropy for selecting the significant feature
+    cross_cv = 3  # Fold of cross validation
+    top_gene_counts = 15  # Numbers of top gene for select common genes in second feature selection
+    setAside_fold = 10  # The Number of Iteration for set_aside method for evaluating model accuracy
+    estimate_method = "set_aside"  # estimate method, belongs to [set_aside, cross_val]
+    modelNums_threshold = 3  # To confirm the impact of gene, the number of models appeared gene in common we needed at least.
 
-    SVM_gamma = 0.001
-    SVM_C = 0.076
-    SVM_kernel = "linear"
-    SVM_coef = 0.54
-    SVM_degree = 3
+    SVM_gamma = 0.001  # Kernel coefficient in [rbf,poly,sigmoid], If gamma is ‘auto’ then 1/n_features will be used
+    SVM_C = 0.076  # Penalty parameter C of the error term
+    SVM_kernel = "linear"  # Specifies the kernel type to be used in the algorithm. one of [linear, poly, rbf, sigmoid]
+    SVM_coef = 0.54  # Independent term in kernel function. It is only significant in [poly, sigmoid]
+    SVM_degree = 3  # Degree of the polynomial kernel function (poly). Ignored by all other kernels
 
-    RF_n = 50
-    RF_minSplit = 2
-    RF_randState = 0
+    RF_n = 22  # The number of trees in the forest
+    RF_minSplit = 2  # The minimum number of samples required to split an internal node
+    RF_randState = 0  # RandomState instance or None, random_state is the seed used by the random number generator
+    RF_maxFeatures = 0.1  # The number of features to consider when looking for the best split, here is a percentage
+    RF_criterion = "gini"  # The function to measure the quality of a split, must be one of ["gini", "entropy"]
 
-    GBDT_n = 100
-    GBDT_learnRate = 0.1
+    GBDT_n = 45  # The number of boosting stages to perform. a large number usually results in better performance
+    GBDT_learnRate = 0.1  # learning rate shrinks the contribution of each tree by learning_rate
+    GBDT_loss = "exponential"  # loss function to be optimized, one of [exponential, deviance]
+    GBDT_maxFeat = 0.05  # The number of features to consider when looking for the best split, float means percentage
 
-    LR_C = 0.20
-    LR_penalty = "l2"
-    LR_solver = "liblinear" # Algorithm to use in the optimization problem
-    LR_tol = 0.001 # Tolerance for stopping criteria
-    LR_Valid_ratio = 0.33 # Partion the dataset into train and validation, the ratio for validation.
-    LR_coef_thresh = 0.2 # threshold used in relation analyse.
+    LR_C = 0.14  # Inverse of regularization strength
+    LR_penalty = "l2"  # Used to specify the norm used in the penalization
+    LR_solver = "liblinear"  # Algorithm to use in the optimization problem
+    LR_tol = 0.001  # Tolerance for stopping criteria
+    LR_Valid_ratio = 0.33  # The ratio for validation, when divide the dataset into train and validation.
+    LR_coef_thresh = 0.2  # threshold used in relation analyse
 
-    KNN_k = 5
+    KNN_k = 5  # K neighbors to predict the class
 
-    Bayes_alpha = 0.1
-    Bayes_probThresh = 0.003
+    Bayes_alpha = 0.01  # Additive (Laplace/Lidstone) smoothing parameter (0 for no smoothing)
+    Bayes_probThresh = 0.003  # Threshold for feature selection, gene impact lag if min_prob is less than it.
+
+    neural_network_alpha = 0.0  # L2 penalty (regularization term) parameter
+    neural_network_hiddenLayer = (4, 7)  # The ith element represents the number of neurons in the ith hidden layer
 
 class PredictModel(object):
     def __init__(self):
@@ -56,24 +66,32 @@ class PredictModel(object):
         self.labels = []
         self.titles = []
         self.classifier = None
+        self.model_name = ""
 
-    def feature_reduction(self, dataset, titles, labels, thresh, feat_impace_file=None):
+    def feature_reduction(self, dataset, titles, labels, thresh):
         """
             Select feature by information gain method.
         """
         feature_oper = Feature_selection()
-        if not feat_impace_file:
-            new_dataset, new_titles = feature_oper.feature_select(dataset, titles, labels, thresh)
-        else:
-            new_dataset, new_titles = feature_oper.sec_feature_select(dataset, titles, feat_impace_file, Parameter.top_gene_counts)
+        new_dataset, new_titles = feature_oper.feature_select(dataset, titles, labels, thresh)
+        return new_dataset, new_titles
+
+    def feature_reduction_sec(self, dataset, titles, feat_impace_file):
+        """
+            Select feature by common gene estimated by several models.
+        """
+        feature_oper = Feature_selection()
+        new_dataset, new_titles = feature_oper.sec_feature_select(
+            dataset, titles, feat_impace_file, Parameter.top_gene_counts, Parameter.modelNums_threshold
+        )
         return new_dataset, new_titles
 
     def set_params(self, **kwargs):
         pass
 
-    def load_data(self, fileName):
+    def load_data(self, mut_analyse_file):
         matrix, labels, titles = [], [], []
-        with open(fileName, "r") as f1:
+        with open(mut_analyse_file, "r") as f1:
             for lineno, line in enumerate(f1):
                 data_array = line.strip("\n").split("\t")
                 if lineno > 0:
@@ -89,7 +107,7 @@ class PredictModel(object):
         self.titles = np.array(titles)
         self.labels = labels
 
-    def param_compare(self, tuned_parameters, dataset, labels, scores_method):
+    def param_tune(self, tuned_parameters, dataset, labels, scores_method):
         X_train, X_test, y_train, y_test = train_test_split(
             dataset, labels, test_size=Parameter.LR_Valid_ratio, random_state=0
         )
@@ -104,7 +122,7 @@ class PredictModel(object):
             print("Grid scores on development set:")
             print()
             for params, mean_score, scores in clf.grid_scores_:
-                print("%0.3f (+/-%0.03f) for %r"
+                print("Accuracy: %0.3f (+/-%0.03f) for parameter: %r"
                       % (mean_score, scores.std() * 2, params))
             print()
 
@@ -123,6 +141,8 @@ class PredictModel(object):
             print(classification_report(y_true, y_pred))
             print()
 
+            self.classifier = clf.best_estimator_
+
     def train(self, train_set, train_labels):
         self.classifier.fit(train_set, train_labels)
 
@@ -130,7 +150,28 @@ class PredictModel(object):
         return self.classifier.predict(val_set)
 
     def evaluate(self, dataset, labels):
-        pass
+        scores = np.zeros(1)
+        if Parameter.estimate_method == "cross_val":
+            scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv).reshape(Parameter.cross_cv, )
+            print(scores)
+            print("Val_Accuracy and Train_Accuracy of model {}: {:.4f}(+/- {:f})".format(
+                self.model_name, scores[:].mean(), scores[:].std())
+            )
+        elif Parameter.estimate_method == "set_aside":
+            scores = np.zeros((2, Parameter.setAside_fold))
+            for i in range(Parameter.setAside_fold):
+                X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
+                self.train(X_train, Y_train)
+                val_acc = self.classifier.score(X_test, Y_test)
+                train_acc = self.classifier.score(X_train, Y_train)
+                scores[:, i] = [val_acc, train_acc]
+                print("---> Loop {:d}\n\tVal_Accuracy: {:.4f}\tTrain_Accuracy: {:.4f}".format(i+1, val_acc, train_acc))
+            print("Val_Accuracy and Train_Accuracy of model {}:\n\t{:.4f}(+/- {:f})\t{:.4f}(+/- {:f})".format(
+                self.model_name, scores[0, :].mean(), scores[0, :].std(), scores[1, :].mean(), scores[1, :].std())
+            )
+        else:
+            print("ERROR, please set method in [set_aside, cross_val]")
+        return scores
 
     def visualize(self, **kwargs):
         pass
@@ -138,7 +179,7 @@ class PredictModel(object):
     def feature_select(self, **kwargs):
         pass
 
-    def save_model(self, fileName):
+    def save_model(self, mut_analyse_file):
         pass
 
 
@@ -148,36 +189,10 @@ class LR(PredictModel):
         self.classifier = linear_model.LogisticRegression(
             C=Parameter.LR_C, penalty=Parameter.LR_penalty, tol=Parameter.LR_tol, solver=Parameter.LR_solver
         )
+        self.model_name = "LR"
 
     def set_params(self, C_up, penalty_up):
         self.classifier.set_params(C=C_up, penalty=penalty_up)
-
-    def train(self, train_set, train_labels):
-        """
-        Args:
-        Returns:
-        """
-        self.classifier.fit(train_set, train_labels)
-
-    def predict(self, val_set):
-        predict_cls = self.classifier.predict(val_set)
-        return predict_cls
-
-    def evaluate(self, dataset, labels):
-        scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
-        print(scores)
-        print("\tAccuracy of model LR: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
-        return scores
-        # res = np.zeros((1, 10))
-        # for i in range(10):
-        #     X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
-        #     self.train(X_train, Y_train)
-        #     # Y_predict = self.predict(X_test)
-        #     acc = self.classifier.score(X_test, Y_test)
-        #     res[0, i] = acc
-        #     # print("Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
-        # print("Accuracy of model LR: {:.4f}(+/- {:f})".format(res.mean(), res.std()*2))
-        # return res
 
     def tumor_analyse(self):
         try:
@@ -187,26 +202,20 @@ class LR(PredictModel):
         valid_index = np.array(abs(clf_coef) > Parameter.LR_coef_thresh)
         print("Mutation express significantly:\n{}".format("\n".join(self.titles[valid_index])))
 
-    def visualize(self):
-        y, x = [[], []], []
-        external = 1000.0
+    def visualize(self, dataFile, mutation_info):
+        y, x = [], []
         plt.figure()
-        self.dataset, self.titles = self.feature_reduction(self.dataset, self.titles, self.labels, Parameter.infoGain_thresh)
-        for no, p in enumerate(["l1", "l2"]):
-            Parameter.LR_penalty = p
-            for i in range(1, 1000):
-                Parameter.LR_C = i / external
-                if no == 0:
-                    x.append(Parameter.LR_C)
-                self.set_params(C_up=Parameter.LR_C, penalty_up=Parameter.LR_penalty)
-                print("-> Parameter status:\tC({0:f})\tpenalty({1:s})".format(Parameter.LR_C, Parameter.LR_penalty), end = "\n\t")
-                score = self.evaluate(self.dataset, self.labels).mean()
-                y[no].append(score)
-        plt.plot(x, y[0], label = "curve for l1 penalty")
-        plt.plot(x, y[1], label = "curve for l2 penalty")
-        plt.title("plot for the relationship of C and prediction accuracy")
+        for i in range(10, 36):
+            Parameter.top_gene_counts = i
+            self.load_data(dataFile)
+            self.dataset, self.titles = self.feature_reduction(self.dataset, self.titles, self.labels, Parameter.infoGain_thresh, mutation_info)
+            x.append(self.titles.shape[0])
+            score = self.evaluate(self.dataset, self.labels).mean()
+            y.append(score)
+        plt.plot(x, y)
+        plt.title("plot for the number of remain gene and prediction accuracy")
         plt.legend(loc = "upper right")
-        plt.xlabel("C/{:f}".format(1/external))
+        plt.xlabel("Number of gene")
         plt.ylabel("Accuracy/1")
         plt.grid(x)
         plt.show()
@@ -223,25 +232,10 @@ class SVM(PredictModel):
         self.classifier = svm.SVC(
             gamma = Parameter.SVM_gamma, C = Parameter.SVM_C, kernel=Parameter.SVM_kernel, coef0=Parameter.SVM_coef, degree=Parameter.SVM_degree
         )
+        self.model_name = "SVM"
 
     def set_params(self, kernel_string, gamma, c):
         self.classifier.set_params(kernel=kernel_string, gamma=gamma, C=c)
-
-    def evaluate(self, dataset, labels):
-        scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
-        print("Accuracy of model SVM: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
-        return scores
-        # res = np.zeros((1, 10))
-        # for i in range(10):
-        #     X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
-        #     self.train(X_train, Y_train)
-        #     # Y_predict = self.predict(X_test)
-        #     acc = self.classifier.score(X_test, Y_test)
-        #     res[0, i] = acc
-        #
-        #     # print("---> Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
-        # print("Accuracy of model SVM: {:.4f}(+/- {:f})".format(res.mean(), res.std()))
-        # return res
 
     def visualize(self):
         y, x = [], []
@@ -269,72 +263,55 @@ class SVM(PredictModel):
         return ["SVM"] + ["{:s}({:.6f})".format(self.titles[ind[1]], ind[0]) for ind in coef_array]
 
 
-class TreeClf(PredictModel):
+class Decision_Tree(PredictModel):
 
     def __init__(self):
         PredictModel.__init__(self)
         # Scikit-learn uses an small optimised version of the CART algorithm
-        self.classifier = tree.DecisionTreeClassifier(max_leaf_nodes=28, min_impurity_split=0.074)
-
-    def evaluate(self, dataset, labels):
-        # scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
-        # print(scores)
-        # print("Accuracy of model DecisionTree: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
-        # return scores
-
-        res = np.zeros((2, 10))
-        for i in range(10):
-            X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
-            self.train(X_train, Y_train)
-            # Y_predict = self.predict(X_test)
-            val_acc = self.classifier.score(X_test, Y_test)
-            train_acc = self.classifier.score(X_train, Y_train)
-            res[:, i] = [val_acc, train_acc]
-
-            print("---> Loop {:d}\n\tVal_Accuracy: {:.4f}\tTrain_Accuracy: {:.4f}".format(i+1, val_acc, train_acc))
-        print("Val_Accuracy and Train_Accuracy of model Decision Tree:\n\t{:.4f}(+/- {:f})\t{:.4f}(+/- {:f})".format(
-            res[0, :].mean(), res[0, :].std(), res[1, :].mean(), res[1, :].std())
-        )
-        return res
+        self.classifier = tree.DecisionTreeClassifier()
+        self.model_name = "Decision_Tree"
 
     # seems that this function does not make sense.
-    def visualize(self, fileName):
-        dot_data = tree.export_graphviz(self.classifier, out_file=None, feature_names=clf.titles, special_characters=True)
+    def visualize(self, mut_analyse_file):
+        dot_data = tree.export_graphviz(self.classifier, out_file=None, feature_names=self.titles, special_characters=True)
         graph = pydotplus.graph_from_dot_data(dot_data)
-        graph.write_pdf(fileName)
+        graph.write_pdf(mut_analyse_file)
         return
 
 
-class Bayes(PredictModel):
+class Bernoulli_Bayes(PredictModel):
     def __init__(self):
         PredictModel.__init__(self)
         self.classifier = naive_bayes.BernoulliNB(
             alpha=Parameter.Bayes_alpha, class_prior = None
         )
-
-    def evaluate(self, dataset, labels):
-        scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
-        print(scores)
-        print("Accuracy of model Bayes: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
+        self.model_name = "Bernoulli_Bayes"
 
     def feature_select(self):
         log_prob_pos = self.classifier.feature_log_prob_
         real_prob_pos = np.exp(log_prob_pos)
-        label_prob_pos = sum(self.labels) / len(self.labels)
-        label_prob_neg = 1 - label_prob_pos
+        real_prob_neg = 1 - real_prob_pos
+        P_Y1 = float(sum(self.labels)) / len(self.labels)
+        P_Y0 = 1 - P_Y1
+        infoEnt = -1 * (P_Y1 * np.log(P_Y1) + P_Y0 * np.log(P_Y0))
 
-        real_ratio, buffer = [], []
+        ce = []
         for i in range(real_prob_pos.shape[1]):
-            max_prob, min_prob = sorted([real_prob_pos[0][i], real_prob_pos[1][i]], reverse=True)
-            if max_prob > 0.8:
-                max_prob, min_prob = 1 - min_prob, 1 - max_prob
-            if min_prob > Parameter.Bayes_probThresh:
-                real_ratio.append((max_prob / min_prob, i))
-            else:
-                buffer.append((max_prob, i))
-        real_ratio.sort(key=lambda x: x[0], reverse=True)
-        buffer.sort(key=lambda x: x[0], reverse=True)
-        content = ["BNBayes"] + ["{}({:.6f})".format(self.titles[x[1]], x[0]) for x in real_ratio + buffer]
+            P_X1 = np.sum(self.dataset[:, i], axis = 0) / self.dataset.shape[0]
+            P_X0 = 1 - P_X1
+            ce.append((abs(P_X1 - P_X0), i))
+
+            # P_Y1_X1 = real_prob_pos[1, i] * P_Y1 / P_X1
+            # P_Y0_X1 = real_prob_pos[0, i] * P_Y0 / P_X1
+            # P_Y1_X0 = real_prob_neg[1, i] * P_Y1 / P_X0
+            # P_Y0_X0 = real_prob_neg[0, i] * P_Y0 / P_X0
+            #
+            # condEnt = (-1*P_X1*(P_Y1_X1*np.log(P_Y1_X1) + P_Y0_X1*np.log(P_Y0_X1)) - P_X0 * (P_Y1_X0*np.log(P_Y1_X0) + P_Y0_X0*np.log(P_Y0_X0)))
+            # infoGain = infoEnt - condEnt
+            # ce.append((infoGain, i))
+        ce.sort(key=lambda x: x[0], reverse=True)
+        content = ["BNBayes"] + ["{}({:.6f})".format(self.titles[x[1]], x[0]) for x in ce]
+
         return content
 
 
@@ -348,11 +325,7 @@ class Xgboost(PredictModel):
             learning_rate = 0.1, n_estimators=140, max_depth=5, min_child_weight=1,
             gamma=0, subsample=0.8, colsample_bytree=0.8, objective="binary:logistic"
         )
-
-    def evaluate(self, dataset, labels):
-        scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
-        print(scores)
-        print("Accuracy of model Xgboost: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
+        self.model_name = "Xgboost"
 
 
 class RandomForest(PredictModel):
@@ -360,46 +333,30 @@ class RandomForest(PredictModel):
         PredictModel.__init__(self)
         self.classifier = ensemble.RandomForestClassifier(
             n_estimators=Parameter.RF_n, max_depth=None, min_samples_split=Parameter.RF_minSplit,
-            random_state=Parameter.RF_randState, max_features="auto"
+            random_state=Parameter.RF_randState, max_features=Parameter.RF_maxFeatures, criterion=Parameter.RF_criterion
         )
+        self.model_name = "RandomForest"
 
-    def evaluate(self, dataset, labels):
-        res = np.zeros((1, 10))
-        for i in range(10):
-            X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
-            self.train(X_train, Y_train)
-            # Y_predict = self.predict(X_test)
-            acc = self.classifier.score(X_test, Y_test)
-            res[0, i] = acc
-
-            print("---> Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
-        print("Accuracy of model Random Forest: {:.4f}(+/- {:f})".format(res.mean(), res.std()))
-        return res
+    def feature_select(self):
+        feature_impt = self.classifier.feature_importances_
+        indices = np.argsort(feature_impt)[::-1]
+        # feature_impt.sort(key = lambda x: x[0], reverse=True)
+        return ["RandomForest"] + ["{:s}({:.6f})".format(self.titles[indices[f]], feature_impt[indices[f]]) for f in range(feature_impt.shape[0])]
 
 
 class GBDT(PredictModel):
     def __init__(self):
         PredictModel.__init__(self)
         self.classifier = ensemble.GradientBoostingClassifier(
-            n_estimators=Parameter.GBDT_n, learning_rate=Parameter.GBDT_learnRate, max_depth=1, random_state=0
+            n_estimators=Parameter.GBDT_n, learning_rate=Parameter.GBDT_learnRate,
+            max_features=Parameter.GBDT_maxFeat
         )
-        # self.classifier.fit([[1, 2]], [1])
+        self.model_name = "GBDT"
 
-    def evaluate(self, dataset, labels):
-        scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
-        print(scores)
-        print("Accuracy of model DecisionTree: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
-        # res = np.zeros((1, 10))
-        # for i in range(10):
-        #     X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
-        #     self.train(X_train, Y_train)
-        #     # Y_predict = self.predict(X_test)
-        #     acc = self.classifier.score(X_test, Y_test)
-        #     res[0, i] = acc
-        #
-        #     print("---> Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
-        # print("Accuracy of model GBDT: {:.4f}(+/- {:f})".format(res.mean(), res.std()))
-        # return res
+    def feature_select(self):
+        feature_impt = [(cf, i) for i, cf in enumerate(self.classifier.feature_importances_)]
+        feature_impt.sort(key = lambda x: x[0], reverse=True)
+        return ["RandomForest"] + ["{:s}({:.6f})".format(self.titles[ind[1]], ind[0]) for ind in feature_impt]
 
 
 class KNN(PredictModel):
@@ -408,86 +365,182 @@ class KNN(PredictModel):
         self.classifier = neighbors.KNeighborsClassifier(
             n_neighbors=Parameter.KNN_k, algorithm="auto"
         )
-
-    def evaluate(self, dataset, labels):
-        # scores = cross_val_score(self.classifier, dataset, labels, cv = Parameter.cross_cv)
-        # print(scores)
-        # print("Accuracy of model K_Nearst_Neighbor: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
-        res = np.zeros((1, 10))
-        for i in range(10):
-            X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
-            self.train(X_train, Y_train)
-            # Y_predict = self.predict(X_test)
-            acc = self.classifier.score(X_test, Y_test)
-            res[0, i] = acc
-
-            # print("---> Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
-        print("Accuracy of model K_NearstNeighbor: {:.4f}(+/- {:f})".format(res.mean(), res.std()))
-        return res
+        self.model_name = "KNN"
 
 
 class ShallowNetwork(PredictModel):
     def __init__(self):
         PredictModel.__init__(self)
         self.classifier = neural_network.MLPClassifier(
-            solver="lbfgs", alpha=1e-4, hidden_layer_sizes=(20, 5), activation="relu"
+            solver="lbfgs", alpha=Parameter.neural_network_alpha,
+            hidden_layer_sizes=Parameter.neural_network_hiddenLayer, activation="relu"
         )
-
-    def evaluate(self, dataset, labels):
-        # scores = cross_val_score(self.classifier, dataset, labels, cv = Parameter.cross_cv)
-        # print(scores)
-        # print("Accuracy of model K_Nearst_Neighbor: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
-        res = np.zeros((1, 10))
-        for i in range(10):
-            X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
-            self.train(X_train, Y_train)
-            Y_predict = self.predict(X_test)
-            print(classification_report(Y_predict, Y_test))
-            acc = self.classifier.score(X_test, Y_test)
-            res[0, i] = acc
-
-            print("---> Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
-        print("Accuracy of model low layer nerual_network: {:.4f}(+/- {:f})".format(res.mean(), res.std()))
-        return res
+        self.model_name = "ShallowNetwork"
 
 
-def feature_impact_estimate(mut_analyse_file, mut_impact_file, threshold, top_counts, model_array):
-    ins_array = [eval("{0}()".format(model_str)) for model_str in model_array]
-    for instance in ins_array:
-        clf = instance
+def model_para_tune_one(mut_analyse_file, threshold, models_tuned_parameters, scores, model_array):
+    classifiers = []
+    for model_name in model_array:
+        clf = eval("{}()".format(model_name))
         clf.load_data(mut_analyse_file)
+        clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
+        clf.param_tune(models_tuned_parameters[model_name], clf.dataset, clf.labels, scores)
+        # clf.evaluate(clf.dataset, clf.labels)
+        classifiers.append(clf)
+    return classifiers
+
+def evaluate_model(classifiers):
+    scores = {}
+    for clf in classifiers:
+        scores[clf.model_name] = clf.evaluate(clf.dataset, clf.labels)
+    return scores
+
+def feat_importance_est(classifiers, valid_modelnames):
+    matrix = []
+    for clf in classifiers:
+        if clf.model_name in valid_modelnames:
+            clf.train(clf.dataset, clf.labels)
+            matrix.append(clf.feature_select())
+    matrix = list(zip(*matrix))
+    return matrix
+
+def model_para_tune_two(mut_analyse_file, mutation_impact_file, models_tuned_parameters, scores, model_array):
+    classifiers = []
+    for model_name in model_array:
+        clf = eval("{}()".format(model_name))
+        clf.load_data(mut_analyse_file)
+        clf.dataset, clf.titles = clf.feature_reduction_sec(clf.dataset, clf.titles, mutation_impact_file)
+        clf.param_tune(models_tuned_parameters[model_name], clf.dataset, clf.labels, scores)
+        # clf.evaluate(clf.dataset, clf.labels)
+        classifiers.append(clf)
+    return classifiers
 
 __end__ = "yes"
 
-
 if __name__ == "__main__":
     # print(__doc__)
-    fileName = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\mutation_for_1-78.table"
+    mut_analyse_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\mutation_for_1-78.table"
     threshold = 0.075
     top_counts = 35
     matrix = []
-    mutation_sort_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\mutation_importance\\mutation_importance_by_ml_top{:d}.txt".format(top_counts)
-    # fileName = "D:\\公司项目_方文征\\胃癌检测项目\\Code\\LogisticRegression-master\\data.txt" # Test data input
+    mutation_sort_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\mutation_importance\\mutation_importance_by_ml.txt"
+    # mut_analyse_file = "D:\\公司项目_方文征\\胃癌检测项目\\Code\\LogisticRegression-master\\data.txt" # Test data input
+
+    # model_array = ["LR", "SVM", "Decision_Tree", "Bernoulli_Bayes", "Xgboost", "RandomForest", "GBDT", "KNN", "ShallowNetwork"]
+    model_array = ["RandomForest"]
+    models_tuned_parameters = {
+        "LR": {"penalty": ["l2", "l1"], "C": [i/1000.0 for i in range(1, 3001)] + [i for i in range(4, 1001)]},
+        "SVM": {
+                "gamma":[i/100.0 for i in range(1, 101)],
+                "C": [i/100.0 for i in range(1, 101)] + [i for i in range(2, 101)],
+                "kernel": ["rbf", "linear", "poly", "sigmoid"],
+                "degree": [3],
+                "coef0": [i/10.0 for i in range(0, 1)]
+            },
+        "Decision_Tree": {"min_impurity_split": [i/1000 for i in range(1, 101)]},
+        "Bernoulli_Bayes": {"alpha":[i/100.0 for i in range(3000)] + [i for i in range(3, 101)]},
+        "Xgboost": {
+                "learning_rate": [i / 100 for i in range(1, 21)],
+                "n_estimators": [i for i in range(300, 400)],
+                "max_depth": [i for i in range(3, 11)],
+                "gamma": [i / 10.0 for i in range(0, 11)],
+                "max_features": [i / 20 for i in range(1, 21)]
+            },
+        "RandomForest": {
+                "max_features":[i/100 for i in range(10, 100)],
+                "n_estimators": [i for i in range(20, 100)],
+                "oob_score": [True],
+                "criterion": ["gini"]
+            },
+        "GBDT": {
+                "loss": ["deviance", "exponential"],
+                "learning_rate": [i/100.0 for i in range(1, 101)],
+                "n_estimators": [i for i in range(20, 200)],
+                "max_features": [i / 20 for i in range(1, 21)],
+            },
+        "KNN": {
+                "n_neighbors": [i for i in range(1, 21)]
+            },
+        "ShallowNetwork": {
+                "alpha": [i/1000.0 for i in range(1000)],
+                "hidden_layer_sizes": [(i, j) for i in range(2, 20) for j in range(2, 20)],
+            }
+    }
+    models_tuned_parameters_assigned = {
+        "LR": {"penalty": ["l2"], "C": [0.14]},
+        "SVM": {"gamma":[0.001], "C": [0.076], "kernel": ["linear"], "coef0": [0.54]},
+        "Decision_Tree": {"max_leaf_nodes": [20], "min_impurity_split": [0.008]},
+        "Bernoulli_Bayes": {"alpha": [0.01]},
+        "Xgboost": {"learning_rate": [0.09], "n_estimators": [380], "gamma": [0.9]},
+        "RandomForest": {"max_features": [0.1], "n_estimators": [22], "oob_score": [True], "criterion": ["gini"]},
+        "GBDT": {"loss": ["exponential"], "learning_rate": [0.1], "n_estimators": [45], "max_features": [0.05]},
+        "KNN": {"n_neighbors": [12]},
+        "ShallowNetwork": {"alpha": [0.0], "hidden_layer_sizes": [(4, 7)]}
+    }
+    scores = ["accuracy"]
+    valid_modelnames = {"LR", "SVM", "RandomForest", "GBDT"}
+
+    # clfs = model_para_tune_one(mut_analyse_file, threshold, models_tuned_parameters_assigned, scores, model_array)
+    # for i in range(10):
+    #     evaluate_model(clfs)
+    # feat_matrix = feat_importance_est(clfs, valid_modelnames)
+    # with open(mutation_sort_file, "w") as f1:
+    #     for line in feat_matrix:
+    #         f1.write("\t".join(line) + "\n")
+
+
+    models_tuned_parameters_assigned_sec = {
+        "LR": {"penalty": ["l2"], "C": [0.523]},
+        "SVM": {"gamma":[0.001], "C": [0.076], "kernel": ["linear"], "coef0": [0.54]},
+        "Decision_Tree": {"max_leaf_nodes": [20], "min_impurity_split": [0.008]},
+        "Bernoulli_Bayes": {"alpha": [0.01]},
+        "Xgboost": {"learning_rate": [0.09], "n_estimators": [380], "gamma": [0.9]},
+        "RandomForest": {"max_features": [0.1], "n_estimators": [22], "oob_score": [True], "criterion": ["gini"]},
+        "GBDT": {"loss": ["exponential"], "learning_rate": [0.1], "n_estimators": [45], "max_features": [0.05]},
+        "KNN": {"n_neighbors": [12]},
+        "ShallowNetwork": {"alpha": [0.0], "hidden_layer_sizes": [(4, 7)]}
+    }
+    x, y = [], []
+    for i in range(4, 36):
+        i_start = datetime.now()
+
+        Parameter.top_gene_counts, x = i, x + [i]
+        clfs = model_para_tune_two(mut_analyse_file, mutation_sort_file, models_tuned_parameters, scores, model_array)
+        y.append(evaluate_model(clfs)[model_array[0]].mean())
+
+        i_end = datetime.now()
+        print('{0} common genes, Runtime: {1}s'.format(i, str(i_end - i_start).split(".")[0]))
+
+    plt.figure()
+    plt.plot(x, y)
+    plt.title("plot for the number of remain gene and prediction accuracy")
+    plt.legend(loc="upper right")
+    plt.xlabel("Number of gene")
+    plt.ylabel("Accuracy/1")
+    plt.grid(x)
+    plt.show()
+
 
     ## 1. Logistic Regression Model
-    # test = LR()
-    # test.load_data(fileName)
+    # clf = LR()
+    # clf.load_data(mut_analyse_file)
     # tuned_parameters = {
-    #     # "penalty":["l2", "l1"],
-    #     "penalty":["l2"],
+    #     "penalty":["l2", "l1"],
     #     "C": [i/1000.0 for i in range(1, 3001)] + [i for i in range(4, 1001)],
-    #     # "C": [0.129]
     # }
     # scores = ["accuracy"]
-    # # test.dataset, test.titles = test.feature_reduction(test.dataset, test.titles, test.labels, threshold, mutation_sort_file)
-    # test.dataset, test.titles = test.feature_reduction(test.dataset, test.titles, test.labels, threshold)
-    # test.param_compare(tuned_parameters, test.dataset, test.labels, scores)
-    # test.train(test.dataset, test.labels)
-    # matrix.append(test.feature_select())
+    # # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold, mutation_sort_file)
+    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
+    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores)
+    # for i in range(10):
+    #     clf.evaluate(clf.dataset, clf.labels)
+    # clf.train(clf.dataset, clf.labels)
+    # matrix.append(clf.feature_select())
+    # # clf.visualize(mut_analyse_file, mutation_sort_file)
 
     ## 2. SVM Model
     # clf = SVM()
-    # clf.load_data(fileName)
+    # clf.load_data(mut_analyse_file)
     # tuned_parameters = {
     #     # "gamma":[i/1000.0 for i in range(1, 1001)],
     #     "gamma":[i/100 for i in range(1, 101)],
@@ -500,26 +553,24 @@ if __name__ == "__main__":
     # }
     # scores_method = ["accuracy"]
     # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # # print("With coefficient of SVM: {}; ".format(Parameter.SVM_C), end="")
-    # # clf.evaluate(clf.dataset, clf.labels)
+    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
     # clf.train(clf.dataset, clf.labels)
     # matrix.append(clf.feature_select())
 
-    ## 3. Decision Tree Model
+    ## 3. Decision Tree
     # tuned_parameters = {
     #     # "max_depth":[i for i in range(35, 36)],
-    #     "max_leaf_nodes": [i for i in range(20, 100)],
+    #     # "max_leaf_nodes": [i for i in range(20, 100)],
     #     "min_impurity_split": [i/1000 for i in range(1, 101)]
     # }
     # scores_method = ["accuracy"]
-    # clf = TreeClf()
-    # clf.load_data(fileName)
+    # clf = Decision_Tree()
+    # clf.load_data(mut_analyse_file)
     # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # # clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
     # clf.evaluate(clf.dataset, clf.labels)
-    # # clf.train(clf.dataset, clf.labels)
-    # # clf.visualize("D:\\公司项目_方文征\\胃癌检测项目\\Data\\tree.pdf")
+    # clf.train(clf.dataset, clf.labels)
+    # clf.visualize("D:\\公司项目_方文征\\胃癌检测项目\\Data\\tree.pdf")
 
     ## 4. KNN Model
     # tuned_parameters = {
@@ -527,75 +578,90 @@ if __name__ == "__main__":
     # }
     # scores_method = ["accuracy"]
     # clf = KNN()
-    # clf.load_data(fileName)
+    # clf.load_data(mut_analyse_file)
     # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # clf.evaluate(clf.dataset, clf.labels)
+    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # for i in range(10):
+    #     clf.evaluate(clf.dataset, clf.labels)
     # clf.train(clf.dataset, clf.labels)
 
     ## 5. Neural Network Model
-    tuned_parameters = {
-        "alpha": [i/1000.0 for i in range(1000)],
-        "hidden_layer_sizes": [(10, 5, 2)]
-    }
-    scores_method = ["accuracy"]
-    clf = ShallowNetwork()
-    clf.load_data(fileName)
-    clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # clf.evaluate(clf.dataset, clf.labels)
+    # tuned_parameters = {
+    #     "alpha": [i/1000.0 for i in range(1000)],
+    #     # "hidden_layer_sizes": [(i, j) for i in range(2, 20) for j in range(2, 20)],
+    #     "hidden_layer_sizes": [(4, 7)]
+    # }
+    # scores_method = ["accuracy"]
+    # clf = ShallowNetwork()
+    # clf.load_data(mut_analyse_file)
+    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
+    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # for i in range(10):
+    #     clf.evaluate(clf.dataset, clf.labels)
 
     ## 6. Random Forest Model
     # tuned_parameters = {
-    #     "max_features":[i/100 for i in range(1, 11)],
-    #     "n_estimators": [i for i in range(1, 50)]
+    #     # "max_features":[i/100 for i in range(1, 11)],
+    #     "max_features":[i/100 for i in range(10, 100)],
+    #     "n_estimators": [i for i in range(20, 100)],
+    #     "oob_score": [True],
+    #     "criterion": ["gini"]
     # }
     # scores_method = ["accuracy"]
     # clf = RandomForest()
-    # clf.load_data(fileName)
+    # clf.load_data(mut_analyse_file)
     # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # clf.evaluate(clf.dataset, clf.labels)
+    # clf.train(clf.dataset, clf.labels)
+    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # for i in range(10):
+    #     clf.evaluate(clf.dataset, clf.labels)
+    # matrix.append(clf.feature_select())
 
     ## 7. Gradient Boosting Desicision Tree
     # tuned_parameters = {
     #     "loss": ["deviance", "exponential"],
-    #     "learning_rate": [i/10.0 for i in range(1, 2)],
+    #     "learning_rate": [i/100.0 for i in range(1, 101)],
     #     "n_estimators": [i for i in range(20, 200)],
-    #     "max_features": [i / 20 for i in range(1, 21)]
+    #     "max_features": [i / 20 for i in range(1, 21)],
     # }
     # scores_method = ["accuracy"]
     # clf = GBDT()
-    # clf.load_data(fileName)
+    # clf.load_data(mut_analyse_file)
     # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # # for i in range(10):
+    # #     clf.evaluate(clf.dataset, clf.labels)
+    # clf.train(clf.dataset, clf.labels)
+    # matrix.append(clf.feature_select())
 
     ## 8. Naive Bayes
     # tuned_parameters = {
     #     "alpha":[i/100.0 for i in range(3000)] + [i for i in range(3, 101)]
     # }
     # scores_method = ["accuracy"]
-    # clf = Bayes()
-    # clf.load_data(fileName)
+    # clf = Bernoulli_Bayes()
+    # clf.load_data(mut_analyse_file)
     # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
     # clf.train(clf.dataset, clf.labels)
     # matrix.append(clf.feature_select())
 
     ## 9. Xgboost
     # tuned_parameters = {
-    #     "n_estimators": [i for i in range(200, 500)],
-    #     "max_depth": [i for i in range(3, 11)],
-    #     "min_child_weight": [i for i in range(10)],
+    #     "learning_rate": [i / 100 for i in range(1, 21)],
+    #     "n_estimators": [i for i in range(300, 400)],
+    #     # "max_depth": [i for i in range(3, 11)],
+    #     # "min_child_weight": [i for i in range(10)],
     #     "gamma": [i / 10.0 for i in range(0, 11)],
     #     # "max_features": [i / 20 for i in range(1, 21)]
     # }
     # scores_method = ["accuracy"]
     # clf = Xgboost()
-    # clf.load_data(fileName)
+    # clf.load_data(mut_analyse_file)
     # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # clf.evaluate(clf.dataset, clf.labels)
+    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # for i in range(10):
+    #     clf.evaluate(clf.dataset, clf.labels)
 
     # matrix = list(zip(*matrix))
     # FileIO.writeLists(mutation_sort_file, matrix)
