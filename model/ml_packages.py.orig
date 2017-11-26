@@ -4,11 +4,14 @@ __author__ = '15624959453@163.com'
 import os
 import sys
 import re
+<<<<<<< HEAD
 from Tools.IO import FileIO, DirIO
 from datetime import datetime
+=======
 #from Tools.IO import FileIO, DirIO
 os.environ["PATH"] += os.pathsep + 'C:/Program Files (x86)/Graphviz2.38/bin/'
 sys.path.append("../data_process/")
+>>>>>>> temp
 
 os.environ["PATH"] += os.pathsep + 'C:/Program Files (x86)/Graphviz2.38/bin/'
 import numpy as np
@@ -22,6 +25,7 @@ import matplotlib.pyplot as plt
 import pydotplus
 
 class Parameter(object):
+<<<<<<< HEAD
     infoGain_thresh = 0.075  # Threshold of cross entropy for selecting the significant feature
     cross_cv = 3  # Fold of cross validation
     top_gene_counts = 15  # Numbers of top gene for select common genes in second feature selection
@@ -60,6 +64,36 @@ class Parameter(object):
 
     neural_network_alpha = 0.0  # L2 penalty (regularization term) parameter
     neural_network_hiddenLayer = (4, 7)  # The ith element represents the number of neurons in the ith hidden layer
+=======
+    infoGain_thresh = 0.075 #mutual information
+    cross_cv = 3  # k-fold
+    top_gene_counts = 15 #how many first mutual 
+
+    SVM_gamma = 0.001  #gamma for SVM
+    SVM_C = 0.076  
+    SVM_kernel = "linear"
+    SVM_coef = 0.54
+    SVM_degree = 3
+
+    RF_n = 50
+    RF_minSplit = 2
+    RF_randState = 0
+
+    GBDT_n = 100
+    GBDT_learnRate = 0.1
+
+    LR_C = 0.02
+    LR_penalty = "l2"
+    LR_solver = "liblinear" # Algorithm to use in the optimization problem ["liblinear",""]
+    LR_tol = 0.001 # Tolerance for stopping criteria
+    LR_Valid_ratio = 0.3 # Partion the dataset into train and validation, the ratio for validation.
+    LR_coef_thresh = 0.2 # threshold used in relation analyse.
+
+    KNN_k = 5
+
+    Bayes_alpha = 0.1
+    Bayes_probThresh = 0.003
+>>>>>>> temp
 
 class PredictModel(object):
     def __init__(self):
@@ -124,9 +158,15 @@ class PredictModel(object):
             clf.fit(X_train, y_train)
             print("Grid scores on development set:")
             print()
+<<<<<<< HEAD
             for params, mean_score, scores in clf.grid_scores_:
                 print("Accuracy: %0.3f (+/-%0.03f) for parameter: %r"
                       % (mean_score, scores.std() * 2, params))
+=======
+            #for params, mean_score, scores in clf.grid_scores_:
+            #    print("%0.3f (+/-%0.03f) for %r"
+            #          % (mean_score, scores.std() * 2, params))
+>>>>>>> temp
             print()
 
             print("Best parameters and scores set found on development set by {}:".format(score))
@@ -181,7 +221,7 @@ class PredictModel(object):
     def feature_select(self, **kwargs):
         pass
 
-    def save_model(self, fileName):
+    def save_model(self, mut_analyse_file):
         pass
 
 
@@ -196,6 +236,36 @@ class LR(PredictModel):
     def set_params(self, C_up, penalty_up):
         self.classifier.set_params(C=C_up, penalty=penalty_up)
 
+<<<<<<< HEAD
+=======
+    def train(self, train_set, train_labels):
+        """
+        Args:
+        Returns:
+        """
+        self.classifier.fit(train_set, train_labels)
+
+    def predict(self, val_set):
+        predict_cls = self.classifier.predict(val_set)
+        return predict_cls
+
+    def evaluate(self, dataset, labels):
+        #scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
+        #print(scores)
+        #print("\tAccuracy of model LR: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
+        #return scores
+        res = np.zeros((1, 10))
+        for i in range(10):
+            X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
+            self.train(X_train, Y_train)
+            # Y_predict = self.predict(X_test)
+            acc = self.classifier.score(X_test, Y_test)
+            res[0, i] = acc
+            print("Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
+        print("Accuracy of model LR: {:.4f}(+/- {:f})".format(res.mean(), res.std()*2))
+        return res
+
+>>>>>>> temp
     def tumor_analyse(self):
         try:
             clf_coef = self.classifier.coef_
@@ -207,6 +277,7 @@ class LR(PredictModel):
     def visualize(self, dataFile, mutation_info):
         y, x = [], []
         plt.figure()
+<<<<<<< HEAD
         for i in range(10, 36):
             Parameter.top_gene_counts = i
             self.load_data(dataFile)
@@ -216,6 +287,22 @@ class LR(PredictModel):
             y.append(score)
         plt.plot(x, y)
         plt.title("plot for the number of remain gene and prediction accuracy")
+=======
+        self.dataset, self.titles = self.feature_reduction(self.dataset, self.titles, self.labels, Parameter.infoGain_thresh)
+        for no, p in enumerate(["l1", "l2"]):
+            Parameter.LR_penalty = p
+            for i in range(1, 1000):
+                Parameter.LR_C = i / external
+                if no == 0:
+                    x.append(Parameter.LR_C)
+                self.set_params(C_up=Parameter.LR_C, penalty_up=Parameter.LR_penalty)
+                print("-> Parameter status:\tC({0:f})\tpenalty({1:s})".format(Parameter.LR_C, Parameter.LR_penalty))
+                score = self.evaluate(self.dataset, self.labels).mean()
+                y[no].append(score)
+        plt.plot(x, y[0], label = "curve for l1 penalty")
+        plt.plot(x, y[1], label = "curve for l2 penalty")
+        plt.title("plot for the relationship of C and prediction accuracy")
+>>>>>>> temp
         plt.legend(loc = "upper right")
         plt.xlabel("Number of gene")
         plt.ylabel("Accuracy/1")
@@ -239,6 +326,25 @@ class SVM(PredictModel):
     def set_params(self, kernel_string, gamma, c):
         self.classifier.set_params(kernel=kernel_string, gamma=gamma, C=c)
 
+<<<<<<< HEAD
+=======
+    def evaluate(self, dataset, labels):
+        #scores = cross_val_score(self.classifier, dataset, labels, cv=Parameter.cross_cv)
+        #print("Accuracy of model SVM: {:.4f}(+/- {:f})".format(scores.mean(), scores.std() * 2))
+        #return scores
+        res = np.zeros((1, 10))
+        for i in range(10):
+            X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
+            self.train(X_train, Y_train)
+            # Y_predict = self.predict(X_test)
+            acc = self.classifier.score(X_test, Y_test)
+            res[0, i] = acc
+        
+            print("---> Loop {:d}\nAccuracy: {:4f}".format(i+1, acc))
+        print("Accuracy of model SVM: {:.4f}(+/- {:f})".format(res.mean(), res.std()))
+        return res
+
+>>>>>>> temp
     def visualize(self):
         y, x = [], []
         external = 1.0
@@ -248,7 +354,7 @@ class SVM(PredictModel):
             Parameter.SVM_C = i / external
             x.append(Parameter.SVM_C)
             self.set_params(kernel_string=Parameter.SVM_kernel, gamma=Parameter.SVM_gamma, c=Parameter.SVM_C)
-            print("-> Parameter status:\tC({0:f})".format(Parameter.SVM_C), end = "\n\t")
+            print("-> Parameter status:\tC({0:f})".format(Parameter.SVM_C))
             score = self.evaluate(self.dataset, self.labels).mean()
             y.append(score)
         plt.plot(x, y)
@@ -421,6 +527,7 @@ __end__ = "yes"
 
 if __name__ == "__main__":
     # print(__doc__)
+<<<<<<< HEAD
     mut_analyse_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\mutation_for_1-78.table"
     threshold = 0.075
     top_counts = 35
@@ -558,6 +665,52 @@ if __name__ == "__main__":
     # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
     # clf.train(clf.dataset, clf.labels)
     # matrix.append(clf.feature_select())
+=======
+    fileName = "/Users/classxiaoli/Desktop/wenzheng/mutation_for_1-78.table"
+    threshold = 0.075
+    top_counts = 35
+    matrix = []
+    mutation_sort_file = "/Users/classxiaoli/Desktop/wenzheng/mutation_importance_by_ml_top{:d}.txt".format(top_counts)
+    # fileName = "D:\\公司项目_方文征\\胃癌检测项目\\Code\\LogisticRegression-master\\data.txt" # Test data input
+
+    # 1. Logistic Regression Model
+    test = LR()
+    test.load_data(fileName)
+    tuned_parameters = {
+        # "penalty":["l2", "l1"],
+        "penalty":["l2"],
+        "C": [i/1000.0 for i in range(1, 3001)] + [i for i in range(4, 1001)],
+        # "C": [0.129]
+    }
+    scores = ["accuracy"]
+    test.dataset, test.titles = test.feature_reduction(test.dataset, test.titles, test.labels, threshold, mutation_sort_file)
+    #test.dataset, test.titles = test.feature_reduction(test.dataset, test.titles, test.labels, threshold)
+    #test.param_compare(tuned_parameters, test.dataset, test.labels, scores)
+    test.train(test.dataset, test.labels)
+    test.evaluate(test.dataset, test.labels)
+    #matrix.append(test.feature_select())
+
+    ## 2. SVM Model
+    #clf = SVM()
+    #clf.load_data(fileName)
+    #tuned_parameters = {
+    #    # "gamma":[i/1000.0 for i in range(1, 1001)],
+    #    "gamma":[i/100 for i in range(1, 101)],
+    #    # "C": [i/1000.0 for i in range(1, 1001)] + [i for i in range(2, 5001)],
+    #    "C": [i/10.0 for i in range(1, 101)],
+    #    # "kernel": ["rbf", "linear", "poly", "sigmoid"],
+    #    "kernel": ["sigmoid"],
+    #    "degree": [3],
+    #    "coef0": [i/10 for i in range(1, 101)]
+    #}
+    #scores_method = ["accuracy"]
+    #clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
+    ##clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    ## print("With coefficient of SVM: {}; ".format(Parameter.SVM_C))
+    #clf.evaluate(clf.dataset, clf.labels)
+    #clf.train(clf.dataset, clf.labels)
+    #matrix.append(clf.feature_select())
+>>>>>>> temp
 
     ## 3. Decision Tree
     # tuned_parameters = {
@@ -588,6 +741,7 @@ if __name__ == "__main__":
     # clf.train(clf.dataset, clf.labels)
 
     ## 5. Neural Network Model
+<<<<<<< HEAD
     # tuned_parameters = {
     #     "alpha": [i/1000.0 for i in range(1000)],
     #     # "hidden_layer_sizes": [(i, j) for i in range(2, 20) for j in range(2, 20)],
@@ -600,6 +754,18 @@ if __name__ == "__main__":
     # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
     # for i in range(10):
     #     clf.evaluate(clf.dataset, clf.labels)
+=======
+    #tuned_parameters = {
+    #    "alpha": [i/1000.0 for i in range(1000)],
+    #    "hidden_layer_sizes": [(10, 5, 2)]
+    #}
+    #scores_method = ["accuracy"]
+    #clf = ShallowNetwork()
+    #clf.load_data(fileName)
+    #clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
+    #clf.param_compare(tuned_parameters, clf.dataset, clf.labels, scores_method)
+    # clf.evaluate(clf.dataset, clf.labels)
+>>>>>>> temp
 
     ## 6. Random Forest Model
     # tuned_parameters = {
