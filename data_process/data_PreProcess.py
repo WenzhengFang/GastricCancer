@@ -121,7 +121,7 @@ class Preprocess(PrioriExtract):
         :param directory: the root of all result
         :return: dict, with sampleID as keys and filepath as values
         '''
-        fileList = glob(os.path.join(directory, "WETask*/SNVAndIndel/*/*.dedup.txt"))
+        fileList = glob(os.path.join(directory, "*WETask*/SNVAndIndel/*/*.dedup.txt"))
         for filePath in fileList:
             sampleName = ".".join(os.path.basename(filePath).split(".")[:-2])
             self.sample_with_path[sampleName] = filePath
@@ -144,36 +144,6 @@ class Preprocess(PrioriExtract):
             print("Warning, no memory for patientID {} in patient_infos.".format(patientID))
         return res
 
-    # def filter_demo(self, patient_nums, directory, output_dir):
-    #     self.filePath_obtain(directory)
-    #     for id in self.patient_ids[:patient_nums]:
-    #         samplePaths = self.path_from_patient(id)
-    #         control_total_data = []
-    #         exper_total_data, exper_total_file = [], os.path.join(output_dir, "patient{}_mutation.table".format(id))
-
-    #         for control_path in samplePaths["blood"]:
-    #             filter_data = self.snvIndel_mut_filter(control_path)
-    #             control_total_data += filter_data
-    #         for exper_path in samplePaths["fresh tissue"]:
-    #             filter_data = self.snvIndel_mut_filter(exper_path)
-    #             exper_total_data += filter_data
-
-    #         control_total_data = sorted(
-    #             control_total_data, key = lambda x: (int(x[0][3:]) if x[0][3:].isdigit() else x[0][3:], int(x[1]))
-    #         )
-    #         exper_total_data = sorted(
-    #             exper_total_data, key = lambda x: (int(x[0][3:]) if x[0][3:].isdigit() else x[0][3:], int(x[1]))
-    #         )
-    #         control_mut_sites = set(["_".join(line[:3]) for line in control_total_data])
-    #         with open(exper_total_file, "w") as f1:
-    #             for exper_data in exper_total_data:
-    #                 exper_mut_site = "_".join(exper_data[:3])
-    #                 if exper_mut_site not in control_mut_sites:
-    #                     f1.write("\t".join(exper_data) + "\n")
-    #                 # else:
-    #                 #     print(exper_mut_sites)
-    #     return True
-
     def filter_mutation(self, patient_nums, directory, output_dir):
         '''
         :param patient_nums: integer, how many patient to filter mutation.
@@ -182,17 +152,20 @@ class Preprocess(PrioriExtract):
         :return: Boolean
         '''
         self.filePath_obtain(directory)
-        mutation_file = os.path.join(output_dir, "mutation_for_1-52.table")
-        single_mutation_file = os.path.join(output_dir, "mutation_single_display_for_1-52.table")
+        mutation_file = os.path.join(output_dir, "mutation_for_1-{:d}.table".format(patient_nums))
+        single_mutation_file = os.path.join(output_dir, "mutation_single_display_for_1-{:d}.table".format(patient_nums))
+        mutation_info_file = os.path.join(output_dir, "mutation_info_statistic.table")
         total_mutaion_set = set()
         mutation_matrix = []
 
         for id in self.patient_ids[:patient_nums]:
+            if id in ["241919", "250681", "255721", "288007"]:
+                continue
             samplePaths = self.path_from_patient(id)
             control_total_data = []
             exper_total_data = []
 
-            # 对于一个病人，将每个样本按照组织类型进行过滤，调用了 snvIndel_mut_filter 方法
+            # For single patient, combine them by tissue type, with calling function snvIndel_mut_filter
             for control_path in samplePaths["blood"]:
                 filter_data = self.snvIndel_mut_filter(control_path)
                 control_total_data += filter_data
@@ -249,6 +222,7 @@ class Preprocess(PrioriExtract):
             sample_tissue = "fresh tissue"
 
         filter_data = []
+        mutation_info_dict = {}
         # execute the filter standard.
         with open(fileName, "r") as f1:
             for lineno, data in enumerate(f1):
@@ -257,9 +231,6 @@ class Preprocess(PrioriExtract):
                     line = data.strip().split("\t")
                     line = line + ["" for _ in range(70 - len(line))]
 
-                    if (10 < int(line[5]) + int(line[6]) and 3 <= int(line[6]) and sample_tissue == "fresh tissue") or \
-                            (10 < int(line[5]) + int(line[6]) and 1 < int(line[6]) and sample_tissue == "blood"):
-                        flag = True
                     if sample_tissue == "fresh tissue" and \
                             10 < int(line[5]) + int(line[6]) and 3 <= int(line[6]) and \
                             float(line[12]) <= 1 and \
@@ -275,43 +246,141 @@ class Preprocess(PrioriExtract):
                              10 < int(line[5]) + int(line[6]) and 1 < int(line[6]) and \
                              float(line[12]) <= 1:
                         filter_data.append(line[:5] + [line[21]] + line[23:30])
-                            # for gene in line[28].split(","):
-                        #     if gene:
-                        #         geneSet.add(gene)
         # with open(filterFile, "w") as f2:
         #     for line in filter_data:
         #         f2.write("\t".join(line) + "\n")
         return filter_data
 
 
-if __name__ == "__main__":
-    # geneSet_unique, geneSet_control, geneSet_tumor = set(), geneSet_L3 | geneSet_L4 | geneSet_L5, geneSet_L8 | geneSet_L6 | geneSet_L7
-    # geneSet_cross = geneSet_tumor & geneSet_control
-    # for gene in geneSet_tumor:
-    #     if gene in geneSet_control:
-    #         geneSet_unique.add(gene)
-    #         if gene.find("TP53") != -1:
-    #             print(True)
-    #
-    # from pprint import pprint
-    # pprint(geneSet_unique)
-    # print(len(geneSet_unique))
+    def filter_mutation_update(self, patient_nums, directory, output_dir, feature_flag = "gene"):
+        '''
+        :param patient_nums: integer, how many patient to filter mutation.
+        :param directory: root of all result
+        :param output_dir: directory for filter file.
+        :return: Boolean
+        '''
+        self.filePath_obtain(directory)
+        mutation_file = os.path.join(output_dir, "datasetOfPathology.table")
+        single_mutation_file = os.path.join(output_dir, "mutationGene_display_by_patient.table")
+        subOutput = os.path.join(output_dir, "patient_mutation_analysis")
+        if not os.path.exists(subOutput):
+            os.mkdir(subOutput)
+        total_mutaion_set = set()
+        mutation_matrix = []
 
-    # sampleInfo_path = "/lustre/users/fangwenzheng/gastricCancer/Reference/full_ver_sample_info.bed"
-    sampleInfo_path = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\full_ver_sample_info.bed"
-    pathology_info_path = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\pathology_type.txt"
+        for id in self.patient_ids[:patient_nums]:
+            germline_filter_info = self.germline_mut_filter(id)
+
+            mutationAttr_filter_info = self.mutation_attr_filter(germline_filter_info)
+            patient_mutation_file = os.path.join(subOutput, id + "_totalMutation.table")
+
+            with open(patient_mutation_file, "w") as f:
+                f.write("\t".join(["Chr", "Start", "End", "Ref", "Alt", "Reads1","Reads2","VarFreq",
+                    "Strands1","Strands2","Qual1","Qual2","Pvalue","MapQual1","MapQual2","Reads1Plus",
+                    "Reads1Minus","Reads2Plus","Reads2Minus","Zygosity", "Cons", "VarType", "Depth",
+                    "Transcripts", "Exon", "DNAChange", "ProChange", "Region", "Gene", "ExonicEffect",
+                    "cytoBand"]) + "\n")
+                for line in mutationAttr_filter_info:
+                    f.write("\t".join(line[:31]) + "\n")
+
+            patient_info = set()
+            if feature_flag == "gene":
+                for site_info in mutationAttr_filter_info:
+                    for gene in site_info[28].split(","):
+                        if gene != "":
+                            patient_info = patient_info | {gene}
+            elif feature_flag == "mut_pos":
+                for site_info in mutationAttr_filter_info:
+                    patient_info = patient_info | {"_".join(site_info[:5])}
+            else:
+                print("ERROR, feature_flag should be one of gene or position by far.")
+
+            total_mutaion_set |= patient_info
+            mutation_matrix.append([id] + list(patient_info))
+
+        # store the filter information in hard disk
+        total_mutaion_list = list(total_mutaion_set)
+        mutation_signs = []
+        for patient in mutation_matrix:
+            pat_mut_by_array, pat_mut_by_set = [], set(patient[1:])
+            for mutation in total_mutaion_list:
+                pat_mut_by_array.append("1" if mutation in pat_mut_by_set else "0")
+            labels = ["", "", ""] if patient[0] not in self.patient_pathInfo else [str(x) for x in self.patient_pathInfo[patient[0]]]
+            mutation_signs.append(patient[:1] + pat_mut_by_array + labels)
+        mutation_signs = [["patient id"] + total_mutaion_list + ["who_level", "diff_level", "lauren_level"]] + mutation_signs
+
+        with open(mutation_file, "w") as f1:
+            for line in mutation_signs:
+                f1.write("\t".join(line) + "\n")
+        with open(single_mutation_file, "w") as f2:
+            for lineno, line in enumerate(mutation_matrix):
+                f2.write("\t".join(line) + "\n")
+
+        return True
+
+    def germline_mut_filter(self, sampleID):
+        samplePaths = self.path_from_patient(sampleID)
+        control_sample_info, tumor_sample_info, buffer_dict = [], [], dict()
+
+        for control_ins in samplePaths["blood"]:
+            with open(control_ins, "r") as f1:
+                for lineno, line in enumerate(f1):
+                    info_array = line.strip().split("\t")
+                    if lineno > 0:
+                        if "_".join(info_array[:5]) not in buffer_dict:
+                            buffer_dict["_".join(info_array[:5])] = len(control_sample_info) - 1
+                            control_sample_info.append(info_array)
+                        else:
+                            passed_no = buffer_dict["_".join(info_array[:5])]
+                            if int(control_sample_info[passed_no][22]) < int(info_array[22]):
+                                control_sample_info[passed_no] = info_array
+        control_mut_sites = set(["_".join(line[:5]) for line in control_sample_info])
+
+        buffer_dict = dict()
+        for tumor_ins in samplePaths["fresh tissue"]:
+            with open(tumor_ins, "r") as f2:
+                for lineno, line in enumerate(f2):
+                    info_array = line.strip().split("\t")
+                    if lineno > 0 and "_".join(info_array[:5]) not in control_mut_sites:
+                        if "_".join(info_array[:5]) not in buffer_dict:
+                            buffer_dict["_".join(info_array[:5])] = len(tumor_sample_info) - 1
+                            tumor_sample_info.append(info_array)
+                        else:
+                            passed_no = buffer_dict["_".join(info_array[:5])]
+                            if int(tumor_sample_info[passed_no][22]) < int(info_array[22]):
+                                tumor_sample_info[passed_no] = info_array
+
+        return tumor_sample_info
+
+    def mutation_attr_filter(self, sampleInfo):
+        filter_mutations = []
+        for site in sampleInfo:
+            site = site + ["" for _ in range(70 - len(site))]
+            depth, mut_reads = int(site[5]) + int(site[6]), int(site[6])
+            pValue, trans, exon, DNAChange, ProChange = float(site[12]), site[23], site[24], site[25], site[26]
+            exonicEffect = site[29]
+            inValid = ["UNKNOWN", ""]
+            if depth >= 50 and mut_reads >= 5 and pValue <= 0.05 and trans not in inValid \
+                    and exon not in inValid and DNAChange not in inValid and ProChange not in inValid \
+                    and exonicEffect not in inValid + ["synonymous SNV"]:
+                filter_mutations.append(site)
+        # print(filter_mutations)
+        return filter_mutations
+
+
+if __name__ == "__main__":
+
+    sampleInfo_path = "/lustre/users/fangwenzheng/gastricCancer/Reference/full_ver_sample_info.bed"
+    pathology_info_path = "/lustre/users/fangwenzheng/gastricCancer/Reference/pathology_type.txt"
     result_path = "/lustre/common/WebServiceResult/Pro000068"
     outputDir = "/lustre/users/fangwenzheng/gastricCancer/result"
 
-    quantifyFile = "/lustre/common/WebServiceResult/Pro000068/WETask17/SNVAndIndel/EGAR00001274628_FCC2C2NACXX_L3_HUMdjpXAAABAAA-91/EGAR00001274628_FCC2C2NACXX_L3_HUMdjpXAAABAAA-91.dedup.txt"
-    filterFile = "/lustre/users/fangwenzheng/gastricCancer/result/filter_for_EGAR00001274628_FCC2C2NACXX_L3_HUMdjpXAAABAAA-91.table"
 
     pe = PrioriExtract(sampleInfo_path, pathology_info_path)
     sampleProcess = Preprocess(sampleInfo_path, pathology_info_path)
     # sampleProcess.filePath_obtain(result_path)
-    # print(sampleProcess.snvIndel_mut_filter(quantifyFile))
-    # print(sampleProcess.path_from_patient("211421"))
-    sampleProcess.filter_mutation(67, result_path, outputDir)
+    # sampleProcess.filter_mutation(78, result_path, outputDir)
+    sampleProcess.filter_mutation_update(78, result_path, outputDir, "mut_pos")
     # pprint(pe.patient_pathologytype())
 
 

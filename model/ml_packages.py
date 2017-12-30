@@ -2,21 +2,16 @@
 __author__ = '15624959453@163.com'
 
 import os
-import sys
-import re
-from Tools.IO import FileIO, DirIO
 from datetime import datetime
-#from Tools.IO import FileIO, DirIO
-os.environ["PATH"] += os.pathsep + 'C:/Program Files (x86)/Graphviz2.38/bin/'
-sys.path.append("../data_process/")
 
 os.environ["PATH"] += os.pathsep + 'C:/Program Files (x86)/Graphviz2.38/bin/'
 import numpy as np
-#from xgboost.sklearn import XGBClassifier
+from xgboost.sklearn import XGBClassifier
 from sklearn import svm, linear_model, tree, neighbors, neural_network, ensemble, naive_bayes
 from sklearn.metrics import classification_report
 from sklearn.cross_validation import train_test_split
 from sklearn.model_selection import cross_val_score, cross_val_predict, GridSearchCV
+from sklearn.metrics import roc_curve, roc_auc_score
 from Dimension_reduction import Feature_selection
 import matplotlib.pyplot as plt
 import pydotplus
@@ -27,13 +22,13 @@ class Parameter(object):
     top_gene_counts = 15  # Numbers of top gene for select common genes in second feature selection
     setAside_fold = 10  # The Number of Iteration for set_aside method for evaluating model accuracy
     estimate_method = "set_aside"  # estimate method, belongs to [set_aside, cross_val]
-    modelNums_threshold = 3  # To confirm the impact of gene, the number of models appeared gene in common we needed at least.
+    modelNums_threshold = 2  # To confirm the impact of gene, the number of models appeared gene in common we needed at least.
 
     SVM_gamma = 0.001  # Kernel coefficient in [rbf,poly,sigmoid], If gamma is ‘auto’ then 1/n_features will be used
     SVM_C = 0.076  # Penalty parameter C of the error term
     SVM_kernel = "linear"  # Specifies the kernel type to be used in the algorithm. one of [linear, poly, rbf, sigmoid]
     SVM_coef = 0.54  # Independent term in kernel function. It is only significant in [poly, sigmoid]
-    SVM_degree = 3  # Degree of the polynomial kernel function (poly). Ignored by all other kernels
+    SVM_degree = 2  # Degree of the polynomial kernel function (poly). Ignored by all other kernels
 
     RF_n = 22  # The number of trees in the forest
     RF_minSplit = 2  # The minimum number of samples required to split an internal node
@@ -134,6 +129,7 @@ class PredictModel(object):
             print(clf.best_params_)
             print(clf.best_score_)
             print()
+
             print("Detailed classification report:")
             print()
             print("The model is trained on the full development set.")
@@ -160,28 +156,47 @@ class PredictModel(object):
                 self.model_name, scores[:].mean(), scores[:].std())
             )
         elif Parameter.estimate_method == "set_aside":
-            scores = np.zeros((2, Parameter.setAside_fold))
+            scores = np.zeros((Parameter.setAside_fold, ))
+            train_scores = np.zeros((Parameter.setAside_fold, ))
             for i in range(Parameter.setAside_fold):
                 X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
                 self.train(X_train, Y_train)
                 val_acc = self.classifier.score(X_test, Y_test)
                 train_acc = self.classifier.score(X_train, Y_train)
-                scores[:, i] = [val_acc, train_acc]
+                scores[i] = val_acc
+                train_scores[i] = train_acc
                 print("---> Loop {:d}\n\tVal_Accuracy: {:.4f}\tTrain_Accuracy: {:.4f}".format(i+1, val_acc, train_acc))
             print("Val_Accuracy and Train_Accuracy of model {}:\n\t{:.4f}(+/- {:f})\t{:.4f}(+/- {:f})".format(
-                self.model_name, scores[0, :].mean(), scores[0, :].std(), scores[1, :].mean(), scores[1, :].std())
+                self.model_name, scores[:].mean(), scores[:].std(), train_scores[:].mean(), train_scores[:].std())
             )
         else:
-            print("ERROR, please set method in [set_aside, cross_val]")
+            print("ERROR, p`lease set method in [set_aside, cross_val]")
         return scores
 
     def visualize(self, **kwargs):
         pass
 
+    def evaluate_roc(self, dataset, labels):
+        X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=Parameter.LR_Valid_ratio)
+        self.train(X_train, Y_train)
+        Y_pred = self.predict(X_test)
+        auc_score = roc_auc_score(Y_test, Y_pred)
+        # print("AUC on validataion set of model {}: {:.4f}".format(self.model_name, auc_score))
+        fpr, tpr, _ = roc_curve(Y_test, Y_pred)
+        plt.figure()
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.plot(fpr, tpr, label=self.model_name)
+        plt.xlabel('False positive rate')
+        plt.ylabel('True positive rate')
+        plt.title('ROC curve with AUC({:.4f})'.format(auc_score.item()))
+        plt.legend(loc='best')
+        plt.show()
+        return auc_score
+
     def feature_select(self, **kwargs):
         pass
 
-    def save_model(self, fileName):
+    def save_model(self, mut_analyse_file):
         pass
 
 
@@ -358,7 +373,7 @@ class GBDT(PredictModel):
     def feature_select(self):
         feature_impt = [(cf, i) for i, cf in enumerate(self.classifier.feature_importances_)]
         feature_impt.sort(key = lambda x: x[0], reverse=True)
-        return ["RandomForest"] + ["{:s}({:.6f})".format(self.titles[ind[1]], ind[0]) for ind in feature_impt]
+        return ["GBDT"] + ["{:s}({:.6f})".format(self.titles[ind[1]], ind[0]) for ind in feature_impt]
 
 
 class KNN(PredictModel):
@@ -397,14 +412,17 @@ def evaluate_model(classifiers):
         scores[clf.model_name] = clf.evaluate(clf.dataset, clf.labels)
     return scores
 
-def feat_importance_est(classifiers, valid_modelnames):
-    matrix = []
+def feat_importance_est(classifiers, valid_modelnames, mutation_sort_file):
+    feat_matrix = []
     for clf in classifiers:
         if clf.model_name in valid_modelnames:
             clf.train(clf.dataset, clf.labels)
-            matrix.append(clf.feature_select())
-    matrix = list(zip(*matrix))
-    return matrix
+            feat_matrix.append(clf.feature_select())
+    feat_matrix = list(zip(*feat_matrix))
+    with open(mutation_sort_file, "w") as f1:
+        for line in feat_matrix:
+            f1.write("\t".join(line) + "\n")
+    return feat_matrix
 
 def model_para_tune_two(mut_analyse_file, mutation_impact_file, models_tuned_parameters, scores, model_array):
     classifiers = []
@@ -417,29 +435,66 @@ def model_para_tune_two(mut_analyse_file, mutation_impact_file, models_tuned_par
         classifiers.append(clf)
     return classifiers
 
+def visualize(x, y, model_array, xlabel, ylabel, outputFile):
+    plt.figure()
+    for i in range(model_array):
+        plt.plot(x, y[i], label = model_array[i])
+    plt.title("Accuracy Curve of ml_model")
+    plt.legend(loc="upper right")
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.grid(True, linestyle = ":")
+    plt.show()
+    plt.savefig(outputFile)
+    y = list(zip(*y))
+    with open(os.path.splitext(outputFile)[0] + ".txt", "w") as f1:
+        for ind in range(len(x)):
+            f1.write("\t".join([str(x[ind])] + [str(m) for m in y[ind]]) + "\n")
+    return True
+
+
+def find_common(mutation_sort_file, mutation_sort_file_by_common):
+    matrix = []
+    with open(mutation_sort_file, "r") as f1:
+        for lineno, line in enumerate(f1):
+            if lineno >= 1:
+                matrix.append([ele.split("(")[0] for ele in line.strip("\n").split("\t")])
+    total_feature_nums, match_dict, model_nums = len(matrix), {}, len(matrix[0])
+    for common_totals in range(1, total_feature_nums+1):
+        common_set = set([line[0] for line in matrix[:common_totals]])
+        for j in range(1, model_nums):
+            common_set &= set([line[j] for line in matrix[:common_totals]])
+        for feature in common_set:
+            if feature not in match_dict:
+                match_dict[feature] = common_totals
+    sort_by_commonNums = sorted([[key, str(value)] for key, value in match_dict.items()], key=lambda x:int(x[1]))
+    with open(mutation_sort_file_by_common, "w") as f2:
+        f2.write("Feature\tUnique_common_nums\n")
+        for line in sort_by_commonNums:
+            f2.write("\t".join(line)+"\n")
+    return True
+
 __end__ = "yes"
 
 if __name__ == "__main__":
     # print(__doc__)
-    mut_analyse_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\mutation_for_1-78.table"
-    threshold = 0.075
-    top_counts = 35
-    matrix = []
-    mutation_sort_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\mutation_importance\\mutation_importance_by_ml.txt"
-    # mut_analyse_file = "D:\\公司项目_方文征\\胃癌检测项目\\Code\\LogisticRegression-master\\data.txt" # Test data input
+    mut_analyse_file = "D:\\Project_JY\\gastricCancer\\Data\\mutation_identify\\datasetOfPathology_pos.table"
+    threshold = 1.40
+    mutation_sort_file = "D:\\Project_JY\\gastricCancer\\Data\\mutation_importance\\mutation_importance_by_ml_pos.txt"
+    mutation_sort_file_by_common = "D:\\Project_JY\\gastricCancer\\Data\\mutation_importance\\mutation_importance_by_common_pos.txt"
 
     # model_array = ["LR", "SVM", "Decision_Tree", "Bernoulli_Bayes", "Xgboost", "RandomForest", "GBDT", "KNN", "ShallowNetwork"]
-    model_array = ["RandomForest"]
+    model_array = ["LR"]
     models_tuned_parameters = {
-        "LR": {"penalty": ["l2", "l1"], "C": [i/1000.0 for i in range(1, 3001)] + [i for i in range(4, 1001)]},
+        "LR": {"penalty": ["l2", "l1"], "C": [i/1000.0 for i in range(1, 1001)] + [i for i in range(2, 101)]},
         "SVM": {
                 "gamma":[i/100.0 for i in range(1, 101)],
                 "C": [i/100.0 for i in range(1, 101)] + [i for i in range(2, 101)],
-                "kernel": ["rbf", "linear", "poly", "sigmoid"],
+                "kernel": ["linear"],
                 "degree": [3],
                 "coef0": [i/10.0 for i in range(0, 1)]
             },
-        "Decision_Tree": {"min_impurity_split": [i/1000 for i in range(1, 101)]},
+        "Decision_Tree": {"min_impurity_split": [i/200 for i in range(1, 101)]},
         "Bernoulli_Bayes": {"alpha":[i/100.0 for i in range(3000)] + [i for i in range(3, 101)]},
         "Xgboost": {
                 "learning_rate": [i / 100 for i in range(1, 21)],
@@ -455,10 +510,10 @@ if __name__ == "__main__":
                 "criterion": ["gini"]
             },
         "GBDT": {
-                "loss": ["deviance", "exponential"],
+                "loss": ["exponential"],
                 "learning_rate": [i/100.0 for i in range(1, 101)],
-                "n_estimators": [i for i in range(20, 200)],
-                "max_features": [i / 20 for i in range(1, 21)],
+                "n_estimators": [i for i in range(40, 50)],
+                "max_features": [i / 100 for i in range(1, 101)],
             },
         "KNN": {
                 "n_neighbors": [i for i in range(1, 21)]
@@ -469,28 +524,16 @@ if __name__ == "__main__":
             }
     }
     models_tuned_parameters_assigned = {
-        "LR": {"penalty": ["l2"], "C": [0.14]},
-        "SVM": {"gamma":[0.001], "C": [0.076], "kernel": ["linear"], "coef0": [0.54]},
+        "LR": {"penalty": ["l2"], "C": [0.339]},
+        "SVM": {"gamma":[0.01], "C": [0.03], "kernel": ["linear"], "coef0": [0.0]},
         "Decision_Tree": {"max_leaf_nodes": [20], "min_impurity_split": [0.008]},
         "Bernoulli_Bayes": {"alpha": [0.01]},
         "Xgboost": {"learning_rate": [0.09], "n_estimators": [380], "gamma": [0.9]},
-        "RandomForest": {"max_features": [0.1], "n_estimators": [22], "oob_score": [True], "criterion": ["gini"]},
+        "RandomForest": {"max_features": [0.1], "n_estimators": [20], "oob_score": [True], "criterion": ["gini"]},
         "GBDT": {"loss": ["exponential"], "learning_rate": [0.1], "n_estimators": [45], "max_features": [0.05]},
         "KNN": {"n_neighbors": [12]},
         "ShallowNetwork": {"alpha": [0.0], "hidden_layer_sizes": [(4, 7)]}
     }
-    scores = ["accuracy"]
-    valid_modelnames = {"LR", "SVM", "RandomForest", "GBDT"}
-
-    # clfs = model_para_tune_one(mut_analyse_file, threshold, models_tuned_parameters_assigned, scores, model_array)
-    # for i in range(10):
-    #     evaluate_model(clfs)
-    # feat_matrix = feat_importance_est(clfs, valid_modelnames)
-    # with open(mutation_sort_file, "w") as f1:
-    #     for line in feat_matrix:
-    #         f1.write("\t".join(line) + "\n")
-
-
     models_tuned_parameters_assigned_sec = {
         "LR": {"penalty": ["l2"], "C": [0.523]},
         "SVM": {"gamma":[0.001], "C": [0.076], "kernel": ["linear"], "coef0": [0.54]},
@@ -502,168 +545,59 @@ if __name__ == "__main__":
         "KNN": {"n_neighbors": [12]},
         "ShallowNetwork": {"alpha": [0.0], "hidden_layer_sizes": [(4, 7)]}
     }
-    x, y = [], []
-    for i in range(4, 36):
-        i_start = datetime.now()
-
-        Parameter.top_gene_counts, x = i, x + [i]
-        clfs = model_para_tune_two(mut_analyse_file, mutation_sort_file, models_tuned_parameters, scores, model_array)
-        y.append(evaluate_model(clfs)[model_array[0]].mean())
-
-        i_end = datetime.now()
-        print('{0} common genes, Runtime: {1}s'.format(i, str(i_end - i_start).split(".")[0]))
-
-    plt.figure()
-    plt.plot(x, y)
-    plt.title("plot for the number of remain gene and prediction accuracy")
-    plt.legend(loc="upper right")
-    plt.xlabel("Number of gene")
-    plt.ylabel("Accuracy/1")
-    plt.grid(x)
-    plt.show()
+    scores = ["accuracy"]
+    valid_modelnames = {"LR", "SVM", "RandomForest"}
 
 
-    ## 1. Logistic Regression Model
+    ## Extra part for debug
     # clf = LR()
     # clf.load_data(mut_analyse_file)
-    # tuned_parameters = {
-    #     "penalty":["l2", "l1"],
-    #     "C": [i/1000.0 for i in range(1, 3001)] + [i for i in range(4, 1001)],
-    # }
-    # scores = ["accuracy"]
-    # # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold, mutation_sort_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores)
-    # for i in range(10):
-    #     clf.evaluate(clf.dataset, clf.labels)
-    # clf.train(clf.dataset, clf.labels)
-    # matrix.append(clf.feature_select())
-    # # clf.visualize(mut_analyse_file, mutation_sort_file)
+    # sts = clf.titles[np.sum(clf.dataset, axis=0) == 74]
+    # find_common(mutation_sort_file, mutation_sort_file_by_common)
 
-    ## 2. SVM Model
-    # clf = SVM()
-    # clf.load_data(mut_analyse_file)
-    # tuned_parameters = {
-    #     # "gamma":[i/1000.0 for i in range(1, 1001)],
-    #     "gamma":[i/100 for i in range(1, 101)],
-    #     # "C": [i/1000.0 for i in range(1, 1001)] + [i for i in range(2, 5001)],
-    #     "C": [i/10.0 for i in range(1, 101)],
-    #     # "kernel": ["rbf", "linear", "poly", "sigmoid"],
-    #     "kernel": ["sigmoid"],
-    #     "degree": [3],
-    #     "coef0": [i/10 for i in range(1, 101)]
-    # }
-    # scores_method = ["accuracy"]
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # clf.train(clf.dataset, clf.labels)
-    # matrix.append(clf.feature_select())
+    ## First step of feature selection
+    # x, y = [], [[] for _ in range(len(model_array))]
+    # patterns, pattern = [[1], [i / 1.0 for i in range(2)]], 1
+    # for i in patterns[pattern]:
+    #     start = datetime.now()
+    #
+    #     if pattern == 1:
+    #         threshold = i
+    #     x.append(threshold)
+    #     clfs = model_para_tune_one(mut_analyse_file, threshold, models_tuned_parameters, scores, model_array)
+    #     # for classifier in clfs:
+    #     #     classifier.evaluate_roc(classifier.dataset, classifier.labels)
+    #     for j in range(len(clfs)):
+    #         y[j].append(evaluate_model(clfs)[model_array[j]].mean())
+    #
+    #     end = datetime.now()
+    #     print('With threshold {0:.2f}, Runtime: {1}s'.format(threshold, str(end - start).split(".")[0]))
+    #
+    # print(y)
+    # if pattern == 1:
+    #     xlabel, ylabel, outputImg = "Threshold", "Accuracy", "./parameter_tune_reference/fig1.png"
+    #     visualize(x, y, model_array[0], xlabel, ylabel, "")
 
-    ## 3. Decision Tree
-    # tuned_parameters = {
-    #     # "max_depth":[i for i in range(35, 36)],
-    #     # "max_leaf_nodes": [i for i in range(20, 100)],
-    #     "min_impurity_split": [i/1000 for i in range(1, 101)]
-    # }
-    # scores_method = ["accuracy"]
-    # clf = Decision_Tree()
-    # clf.load_data(mut_analyse_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # clf.evaluate(clf.dataset, clf.labels)
-    # clf.train(clf.dataset, clf.labels)
-    # clf.visualize("D:\\公司项目_方文征\\胃癌检测项目\\Data\\tree.pdf")
 
-    ## 4. KNN Model
-    # tuned_parameters = {
-    #     "n_neighbors":[i for i in range(1, 21)]
-    # }
-    # scores_method = ["accuracy"]
-    # clf = KNN()
-    # clf.load_data(mut_analyse_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # for i in range(10):
-    #     clf.evaluate(clf.dataset, clf.labels)
-    # clf.train(clf.dataset, clf.labels)
+    ## Second step of feature selection.
+    x, y = [], [[] for _ in range(len(model_array))]
+    for i in range(36, 37):
+        i_start = datetime.now()
 
-    ## 5. Neural Network Model
-    # tuned_parameters = {
-    #     "alpha": [i/1000.0 for i in range(1000)],
-    #     # "hidden_layer_sizes": [(i, j) for i in range(2, 20) for j in range(2, 20)],
-    #     "hidden_layer_sizes": [(4, 7)]
-    # }
-    # scores_method = ["accuracy"]
-    # clf = ShallowNetwork()
-    # clf.load_data(mut_analyse_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # for i in range(10):
-    #     clf.evaluate(clf.dataset, clf.labels)
+        Parameter.top_gene_counts = i
+        clfs = model_para_tune_two(mut_analyse_file, mutation_sort_file, models_tuned_parameters, scores, model_array)
+        if len(x) > 0 and clfs[0].dataset.shape[1] == x[-1]:
+            continue
+        feature_nums = clfs[0].dataset.shape[1]
+        x.append(feature_nums)
+        for j in range(len(clfs)):
+            y[j].append(evaluate_model(clfs)[model_array[j]].mean())
 
-    ## 6. Random Forest Model
-    # tuned_parameters = {
-    #     # "max_features":[i/100 for i in range(1, 11)],
-    #     "max_features":[i/100 for i in range(10, 100)],
-    #     "n_estimators": [i for i in range(20, 100)],
-    #     "oob_score": [True],
-    #     "criterion": ["gini"]
-    # }
-    # scores_method = ["accuracy"]
-    # clf = RandomForest()
-    # clf.load_data(mut_analyse_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.train(clf.dataset, clf.labels)
-    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # for i in range(10):
-    #     clf.evaluate(clf.dataset, clf.labels)
-    # matrix.append(clf.feature_select())
+        i_end = datetime.now()
+        print('Top {0} gene set, {1} genes remained, Runtime: {2}s'.format(i, feature_nums, str(i_end - i_start).split(".")[0]))
 
-    ## 7. Gradient Boosting Desicision Tree
-    # tuned_parameters = {
-    #     "loss": ["deviance", "exponential"],
-    #     "learning_rate": [i/100.0 for i in range(1, 101)],
-    #     "n_estimators": [i for i in range(20, 200)],
-    #     "max_features": [i / 20 for i in range(1, 21)],
-    # }
-    # scores_method = ["accuracy"]
-    # clf = GBDT()
-    # clf.load_data(mut_analyse_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # # for i in range(10):
-    # #     clf.evaluate(clf.dataset, clf.labels)
-    # clf.train(clf.dataset, clf.labels)
-    # matrix.append(clf.feature_select())
+    # print(y)
+    # if pattern == 1:
+    #     xlabel, ylabel, outputImg = "FeatureNums", "Accuracy", "./parameter_tune_reference/fig1.png"
+    #     visualize(x, y, model_array[0], xlabel, ylabel, "")
 
-    ## 8. Naive Bayes
-    # tuned_parameters = {
-    #     "alpha":[i/100.0 for i in range(3000)] + [i for i in range(3, 101)]
-    # }
-    # scores_method = ["accuracy"]
-    # clf = Bernoulli_Bayes()
-    # clf.load_data(mut_analyse_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # clf.train(clf.dataset, clf.labels)
-    # matrix.append(clf.feature_select())
-
-    ## 9. Xgboost
-    # tuned_parameters = {
-    #     "learning_rate": [i / 100 for i in range(1, 21)],
-    #     "n_estimators": [i for i in range(300, 400)],
-    #     # "max_depth": [i for i in range(3, 11)],
-    #     # "min_child_weight": [i for i in range(10)],
-    #     "gamma": [i / 10.0 for i in range(0, 11)],
-    #     # "max_features": [i / 20 for i in range(1, 21)]
-    # }
-    # scores_method = ["accuracy"]
-    # clf = Xgboost()
-    # clf.load_data(mut_analyse_file)
-    # clf.dataset, clf.titles = clf.feature_reduction(clf.dataset, clf.titles, clf.labels, threshold)
-    # clf.param_tune(tuned_parameters, clf.dataset, clf.labels, scores_method)
-    # for i in range(10):
-    #     clf.evaluate(clf.dataset, clf.labels)
-
-    # matrix = list(zip(*matrix))
-    # FileIO.writeLists(mutation_sort_file, matrix)
