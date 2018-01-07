@@ -1,4 +1,4 @@
-﻿# -*- coding = utf-8 =_=
+# -*- coding = utf-8 =_=
 
 __author__ = '15624959453@163.com'
 
@@ -75,8 +75,10 @@ class Feature_selection(object):
         content = np.zeros((N, M+1))
         content[:, 0:M] = dataset
         content[:, -1] = labels
-        corr_matrix = np.corrcoef(content, rowvar=0)
-        return corr_matrix[-1:, :-1]
+        corr_matrix = np.array([np.corrcoef(dataset[:, i], labels)[0, 1] for i in range(dataset.shape[1])])
+        # corr_norm = corr_matrix[-1:, :-1].reshape(-1, )
+        corr_matrix[np.isnan(corr_matrix)] = 0
+        return corr_matrix
         # return corr_matrix
 
     def infoGain_calculate(self, dataset, labels):
@@ -85,25 +87,36 @@ class Feature_selection(object):
         for i in range(M):
             x = dataset[:, i]
             res.append(ent.infomationGain(x, labels))
-        return res
+        return np.array(res, dtype=np.float32)
 
-    def output_result(self, corr_matrix, dir):
-        corrcoef_file = os.path.join(dir, "corrcoef_of_muationAndPathology_1-78.table")
+    def output_corr(self, corrcoef_file):
+        a = self.corrcoef_calculate(self.dataset, self.labels)
+        b = self.infoGain_calculate(self.dataset, self.labels)
+        c = np.abs(a) / np.max(np.abs(a), axis=-1) + 1 * b / np.max(b)
+        gene_corr = [["gene", "Person_correlation", "Infomation_gain", "Combined_feature_score"]] \
+                    + [[self.titles[i], a[i], b[i], c[i]] for i in range(len(self.titles))]
+
         with open(corrcoef_file, "w") as f1:
-            for line in corr_matrix:
+            for line in gene_corr:
                 f1.write("\t".join(list(map(str, line))) + "\n")
         return
 
     def feature_select(self, dataset, titles, labels, thresh):
-        infoGainTable = np.array(self.infoGain_calculate(dataset, labels))
-        titles_np = titles
-        feature_select_index = infoGainTable >= thresh
-        feature_select_name = titles_np[feature_select_index]
+        a = self.corrcoef_calculate(dataset, labels)
+        b = self.infoGain_calculate(dataset, labels)
+        cb_score = np.abs(a) / np.max(np.abs(a), axis=-1) + 1 * b / np.max(b)
+
+        # infoGainTable = self.infoGain_calculate(dataset, labels)
+
+        feature_select_index = cb_score >= thresh
+        feature_select_name = titles[feature_select_index]
         filter_dataset = dataset[:, feature_select_index]
         return filter_dataset, feature_select_name
 
-    def sec_feature_select(self, dataset, titles, feat_impor_file, top_counts, common_threshold):
+    def sec_feature_select(self, dataset, titles, feat_impor_file, top_counts=20, common_threshold=None):
         matrix = IO.FileIO.readLists(feat_impor_file)
+        if common_threshold == None:
+            common_threshold = len(matrix[0])
         matrix_T_clear = list(zip(*[[ele.split("(")[0] for ele in x] for x in matrix[1:top_counts+1]]))
         total_gene_set = dict([[gene, 1] for gene in matrix_T_clear[0]])
         common_set = set()
@@ -118,8 +131,8 @@ class Feature_selection(object):
                 common_set.add(gene)
         feature_select_index = [i for i in range(titles.shape[0]) if titles[i] in common_set]
         filter_titles = titles[feature_select_index]
-	print(filter_titles)
         filter_dataset = dataset[:, feature_select_index]
+        # print(filter_titles)
         return filter_dataset, filter_titles
 
 
@@ -170,21 +183,21 @@ class Dimension_Reduce(object):
 
 if __name__ == "__main__":
     # print(__doc__)
-    fileName = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\mutation_for_1-78.table"
-    output_dir = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\突变鉴定\\"
-    mutation_sort_file = "D:\\公司项目_方文征\\胃癌检测项目\\Data\\mutation_importance\\mutation_importance_by_ml.txt"
+    fileName = "D:\\Project_JY\\gastricCancer\\Data\\mutation_identify\\datasetOfPathology_pos.table"
+    corrcoef_file = "D:\\Project_JY\\gastricCancer\\Data\\mutation_identify\\corrcoef_of_muationAndPathology_pos.table"
+    mutation_sort_file = "D:\\Project_JY\\gastricCancer\\Data\\mutation_importance\\mutation_importance_by_ml_pos.txt"
+    lambd = 1
 
     fs = Feature_selection()
     fs.load_data(fileName)
-    info_gain_threshold = 0.075
-    a = fs.corrcoef_calculate(fs.dataset, fs.labels)
-    b = fs.infoGain_calculate(fs.dataset, fs.labels)
-    # datasets_select, feature_selection = fs.feature_select(fs.dataset, fs.titles, fs.labels, info_gain_threshold)
+    cbScore_threshold = 1.33
+
+    datasets_select, feature_selection = fs.feature_select(fs.dataset, fs.titles, fs.labels, cbScore_threshold)
     # print(feature_selection)
     # gene_corr = [["gene", "Person_correlation", "Infomation_gain"]] + [[fs.titles[i], a[0, i], b[i]] for i in range(len(fs.titles))]
-    # fs.output_result(gene_corr, output_dir)
+    # fs.output_corr(corrcoef_file)
 
-    datasets_select, feature_selection = fs.sec_feature_select(fs.dataset, fs.titles, mutation_sort_file, 15, 3)
+    # datasets_select, feature_selection = fs.sec_feature_select(fs.dataset, fs.titles, mutation_sort_file, 15, 3)
 
 
     # dr = Dimension_Reduce()
