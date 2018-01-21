@@ -10,21 +10,24 @@ http://scikit-learn.org/stable/supervised_learning.html#supervised-learning
 """
 
 import sys
-sys.path.append(".")
 import os
 from datetime import datetime
-import json
-import parameter_op as pm
-
-os.environ["PATH"] += os.pathsep + 'C:/Program Files (x86)/Graphviz2.38/bin/'
+import pandas as pd
+import scipy.io as sio
 import numpy as np
-from xgboost.sklearn import XGBClassifier
+
+sys.path.append("../")
+
+import parameter_op as pm
+from data_process.Dimension_reduction import Feature_selection
+from utility.mutual_information import information_gain
+from utility.entropy_estimators import midd
+
 from sklearn import svm, linear_model, tree, neighbors, neural_network, ensemble, naive_bayes
 from sklearn.metrics import classification_report
-from sklearn.cross_validation import train_test_split
-from sklearn.model_selection import cross_val_score, cross_val_predict, GridSearchCV
+from sklearn.model_selection import cross_val_score, GridSearchCV, StratifiedKFold, train_test_split, StratifiedShuffleSplit
 from sklearn.metrics import roc_curve, roc_auc_score
-from Dimension_reduction import Feature_selection
+from sklearn import preprocessing
 import matplotlib.pyplot as plt
 import pydotplus
 
@@ -32,113 +35,104 @@ import pydotplus
 
 class PredictModel(object):
     def __init__(self):
-        # Feature_selection.__init__(self)
-        # self.dataset = dataset
-        self.dataset = []
-        self.labels = []
-        self.titles = []
+        self.entire_data = pd.DataFrame(np.zeros((2, 4)))
+        self.char_X = np.zeros((2, 3))
+        self.labels_Y = np.zeros((2,))
+        self.features = np.zeros((3,))
         self.classifier = None
         self.model_name = ""
-
-    def feature_reduction(self, dataset, titles, labels, thresh):
-        """
-            Select feature by information gain method.
-        """
-        feature_oper = Feature_selection()
-        new_dataset, new_titles = feature_oper.feature_select(dataset, titles, labels, thresh)
-        return new_dataset, new_titles
-
-    def feature_reduction_sec(self, dataset, titles, feat_impace_file, topNums, commonModel_bottom):
-        """
-            Select feature by common gene estimated by several models.
-        """
-        feature_oper = Feature_selection()
-        new_dataset, new_titles = feature_oper.sec_feature_select(
-            dataset, titles, feat_impace_file, topNums, commonModel_bottom
-        )
-        return new_dataset, new_titles
+        self.sample_weight = None
 
     def set_params(self, **kwargs):
-        pass
+        arg_dict = kwargs
+        self.classifier.set_params(**arg_dict)
 
-    def load_data(self, mut_analyse_file):
-        matrix, labels, titles = [], [], []
-        with open(mut_analyse_file, "r") as f1:
-            for lineno, line in enumerate(f1):
-                data_array = line.strip("\n").split("\t")
-                if lineno > 0:
-                    if data_array[-3]:
-                        labels.append(int(data_array[-3]))
-                        matrix.append([int(x) for x in data_array[1:-3]])
-                else:
-                    titles = data_array[1:-3]
-        self.dataset = np.array(matrix)
-        self.titles = np.array(titles)
-        self.labels = labels
+    def load_data(self, data_origin, data_type):
+        # Load data to memory according to the data_type
+        if data_type == 'mat':
+            mm_scaler = preprocessing.MinMaxScaler()
+            data_mat = sio.loadmat("../Data/origin_Data/{}.mat".format(data_origin))
+            self.char_X = mm_scaler.fit_transform(data_mat['X'])
+            self.labels_Y = data_mat['Y'].reshape(data_mat['Y'].shape[0], )
+            self.features = np.char.add('f', np.arange(self.char_X.shape[1]).astype(str))
 
-    def param_tune(self, tuned_parameters, dataset, labels, scores_method):
-        X_train, X_test, y_train, y_test = train_test_split(
-            dataset, labels, test_size=pm._setAside_partionRatio
-        )
-        for score in scores_method:
-            print("# Tuning hyper-parameters for {}\n".format(score))
+        elif data_type == 'tz_lauren':
+            self.entire_data = pd.read_csv(data_origin, sep="\t")
+            self.entire_data = self.entire_data.dropna(axis=0)
+            self.features = np.array([
+                feat for feat in self.entire_data.columns
+                if feat not in {'patient id', 'who_level', 'diff_level', 'lauren_level'}
+                ])
+            self.char_X = self.entire_data[self.features].values
+            self.labels_Y = self.entire_data['who_level'].values
+
+        elif data_type == "tz_who":
+            self.entire_data = pd.read_csv(data_origin, sep="\t")
+            self.entire_data = self.entire_data.dropna(axis=0)
+            self.features = np.array([
+                feat for feat in self.entire_data.columns
+                if feat not in {'patient id', 'who_level', 'diff_level', "sample_weight", 'lauren_level'}
+                ])
+            self.char_X = self.entire_data[self.features].values
+            self.labels_Y = self.entire_data['lauren_level'].values
+            self.sample_weight = self.entire_data['sample_weight'].values
+
+    def param_tune(self, tuned_parameters, data_x, label_y, sample_weight, scores_methods):
+        # sss = StratifiedShuffleSplit(n_splits=1, test_size=0.33)
+        # train_ind, test_ind = sss.split(data_x, label_y)[0]
+        # x_train, x_test = data_x[train_ind], data_x[test_ind]
+        # y_train, y_test = label_y[train_ind], label_y[test_ind]
+        # weight_train, weight_test = sample_weight[train_ind], sample_weight[test_ind]
+
+        for sm in scores_methods:
+            print("# Tuning hyper-parameters for {}\n".format(sm))
 
             clf = GridSearchCV(
-                estimator=self.classifier, param_grid=tuned_parameters, cv=pm._crossVal_fold, scoring=score
+                estimator=self.classifier, param_grid=tuned_parameters, cv=3, scoring=sm
             )
-            clf.fit(X_train, y_train)
-            print("Grid scores on development set:\n")
-            for params, mean_score, scores in clf.grid_scores_:
+            clf.fit(data_x, label_y, sample_weight=sample_weight)
+            print("Grid scores on development set by cross validation:\n")
+            for params, mean_score, score_array in clf.grid_scores_:
                 print("Accuracy: %0.3f (+/-%0.03f) for parameter: %r"
-                      % (mean_score, scores.std() * 2, params))
+                      % (mean_score, score_array.std() * 2, params))
 
-            print("\nBest parameters and scores set found on development set by {}:\n".format(score))
-            print("Accuracy of cross validation: {:.3f} for parameter: {}\n".format(clf.best_score_,  clf.best_params_))
+            print("\nBest parameters and scores set found on development set by {}:\n".format(sm))
+            print("Accuracy of cross validation: {:.3f} for parameter: {}\n".format(clf.best_score_, clf.best_params_))
 
-            print("Detailed classification report:\n")
-            print(">>>The model is trained on the full development set.")
-            print(">>>The scores are computed on the full evaluation set.\n")
-            y_true, y_pred = y_test, clf.predict(X_test)
-            print(classification_report(y_true, y_pred))
-            print()
+            # print("Detailed classification report on evaluation set:\n")
+            # print(">>>The model is trained on the full development set.")
+            # print(">>>The scores are computed on the full evaluation set.\n")
+            # y_true, y_pred = y_test, clf.predict(x_test)
+            # print(classification_report(y_true, y_pred) + "\n")
 
             self.classifier = clf.best_estimator_
 
-    def train(self, train_set, train_labels):
-        self.classifier.fit(train_set, train_labels)
+    def train(self, train_X, train_Y, sample_weight):
+        self.classifier.fit(train_X, train_Y, sample_weight)
 
-    def predict(self, val_set):
-        return self.classifier.predict(val_set)
+    def predict(self, valid_X):
+        return self.classifier.predict(valid_X)
 
-    def evaluate(self, dataset, labels):
-        scores = np.zeros(1)
+    def evaluate(self, X, y, weight):
         em, fold, it, pr = pm._estimate_method, pm._crossVal_fold, pm._setAside_iterTimes, pm._setAside_partionRatio
-        if em == "cross_val":
-            scores = cross_val_score(self.classifier, dataset, labels, cv=fold).reshape(fold, )
-            print(scores)
-            print("Val_Accuracy and Train_Accuracy of model {}: {:.4f}(+/- {:f})".format(
-                self.model_name, scores[:].mean(), scores[:].std())
-            )
-        elif em == "set_aside":
-            scores = np.zeros((it, ))
-            train_scores = np.zeros((it, ))
-            for i in range(it):
-                X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=pr)
-                self.train(X_train, Y_train)
-                val_acc = self.classifier.score(X_test, Y_test)
-                train_acc = self.classifier.score(X_train, Y_train)
-                scores[i] = val_acc
-                train_scores[i] = train_acc
-                print("---> Loop {:d}\n\tVal_Accuracy: {:.4f}\tTrain_Accuracy: {:.4f}".format(i+1, val_acc, train_acc))
-            print("Val_Accuracy and Train_Accuracy of model {}:\n\t{:.4f}(+/- {:f})\t{:.4f}(+/- {:f})".format(
-                self.model_name, scores[:].mean(), scores[:].std(), train_scores[:].mean(), train_scores[:].std())
-            )
-        else:
-            print("ERROR, p`lease set method in [set_aside, cross_val]")
-        return scores
+        val_scores, train_scores = np.zeros((fold, )), np.zeros((fold, ))
 
-    def visualize(self, **kwargs):
-        pass
+        skf = StratifiedKFold(n_splits=3, shuffle=True)
+        for i, (train_index, test_index) in enumerate(skf.split(X, y)):
+            X_train, X_test = X[train_index], X[test_index]
+            y_train, y_test = y[train_index], y[test_index]
+            weight_train, weight_test = weight[train_index], weight[test_index]
+            self.train(X_train, y_train, weight_train)
+            val_scores[i] = self.classifier.score(X_test, y_test, weight_test)
+            train_scores[i] = self.classifier.score(X_train, y_train, weight_train)
+
+        print("Val_Accuracy: {}".format(val_scores))
+        print(
+            "Val_Accuracy and Train_Accuracy of model {}: \n{:.4f}(+/- {:f})\t{:.4f}(+/- {:f})".format(
+                self.model_name, val_scores[:].mean(), val_scores[:].std(),
+                train_scores[:].mean(), train_scores[:].std())
+        )
+        return val_scores
 
     def evaluate_roc(self, dataset, labels):
         X_train, X_test, Y_train, Y_test = train_test_split(dataset, labels, test_size=pm._setAside_partionRatio)
@@ -157,83 +151,56 @@ class PredictModel(object):
         plt.show()
         return auc_score
 
-    def feature_select(self, **kwargs):
-        pass
-
-    def save_model(self, mut_analyse_file):
-        pass
+    def featSort_byInfoGain(self, x, y):
+        info_array = np.array([information_gain(x[:, i], y) for i in range(x.shape[1])])
+        sort_ind = np.argsort(info_array)[::-1]
+        info_array = info_array[sort_ind]
+        return info_array, sort_ind
 
 
 class LR(PredictModel):
     def __init__(self):
         PredictModel.__init__(self)
         self.classifier = linear_model.LogisticRegression(
-            C=0.339, penalty="l2", tol=0.001, solver="liblinear", multi_class="ovr"
+            C=0.2, penalty="l2", tol=0.001, solver="liblinear", multi_class="ovr"
         )
         self.model_name = "LR"
-
-    def set_params(self, C_up, penalty_up):
-        self.classifier.set_params(C=C_up, penalty=penalty_up)
 
 
 class SVM(PredictModel):
     def __init__(self):
         PredictModel.__init__(self)
         self.classifier = svm.SVC(
-            gamma = 0.01, C = 0.03, kernel="linear", coef0=0.54, degree=2
+            gamma=0.01, C=0.03, kernel="linear", coef0=0.54, degree=2, decision_function_shape='ovr'
         )
         self.model_name = "SVM"
-
-    def set_params(self, kernel_string, gamma, c):
-        self.classifier.set_params(kernel=kernel_string, gamma=gamma, C=c)
-
-    # def visualize(self):
-    #     y, x = [], []
-    #     external = 1.0
-    #     plt.figure()
-    #     self.dataset, self.titles = self.feature_reduction(self.dataset, self.titles, self.labels, Parameter.infoGain_thresh)
-    #     for i in range(1, 1001):
-    #         Parameter.SVM_C = i / external
-    #         x.append(Parameter.SVM_C)
-    #         self.set_params(kernel_string=Parameter.SVM_kernel, gamma=Parameter.SVM_gamma, c=Parameter.SVM_C)
-    #         print("-> Parameter status:\tC({0:f})".format(Parameter.SVM_C), end = "\n\t")
-    #         score = self.evaluate(self.dataset, self.labels).mean()
-    #         y.append(score)
-    #     plt.plot(x, y)
-    #     plt.title("plot for the relationship of C and prediction accuracy in linear kernel")
-    #     plt.legend(loc = "upper right")
-    #     plt.xlabel("C/{:f}".format(1/external))
-    #     plt.ylabel("Accuracy/1")
-    #     plt.grid(x)
-    #     plt.show()
 
     def feature_select(self):
         coef_array = [(cf, i) for i, cf in enumerate(self.classifier.coef_[0])]
         coef_array.sort(key=lambda x: abs(x[0]), reverse=True)
-        return ["SVM"] + ["{:s}({:.6f})".format(self.titles[ind[1]], ind[0]) for ind in coef_array]
+        return ["SVM"] + ["{:s}({:.6f})".format(self.features[ind[1]], ind[0]) for ind in coef_array]
 
 
-class Decision_Tree(PredictModel):
-
+class DecisionTree(PredictModel):
     def __init__(self):
         PredictModel.__init__(self)
         # Scikit-learn uses an small optimised version of the CART algorithm
         self.classifier = tree.DecisionTreeClassifier()
         self.model_name = "Decision_Tree"
 
-    # seems that this function does not make sense.
     def visualize(self, mut_analyse_file):
-        dot_data = tree.export_graphviz(self.classifier, out_file=None, feature_names=self.titles, special_characters=True)
+        dot_data = tree.export_graphviz(self.classifier, out_file=None, feature_names=self.features,
+                                        special_characters=True)
         graph = pydotplus.graph_from_dot_data(dot_data)
         graph.write_pdf(mut_analyse_file)
         return
 
 
-class Bernoulli_Bayes(PredictModel):
+class BernoulliBayes(PredictModel):
     def __init__(self):
         PredictModel.__init__(self)
         self.classifier = naive_bayes.BernoulliNB(
-            alpha=0.01, class_prior = None
+            alpha=0.01, class_prior=None
         )
         self.model_name = "Bernoulli_Bayes"
 
@@ -247,27 +214,28 @@ class Bernoulli_Bayes(PredictModel):
 
         ce = []
         for i in range(real_prob_pos.shape[1]):
-            P_X1 = np.sum(self.dataset[:, i], axis = 0) / self.dataset.shape[0]
+            P_X1 = np.sum(self.entire_data[:, i], axis=0) / self.entire_data.shape[0]
             P_X0 = 1 - P_X1
             ce.append((abs(P_X1 - P_X0), i))
 
         ce.sort(key=lambda x: x[0], reverse=True)
-        content = ["BNBayes"] + ["{}({:.6f})".format(self.titles[x[1]], x[0]) for x in ce]
+        content = ["BNBayes"] + ["{}({:.6f})".format(self.features[x[1]], x[0]) for x in ce]
 
         return content
 
 
-class Xgboost(PredictModel):
-    '''
-        waiting for that the package installed successfully.
-    '''
-    def __init__(self):
-        PredictModel.__init__(self)
-        self.classifier = XGBClassifier(
-            learning_rate = 0.1, n_estimators=140, max_depth=5, min_child_weight=1,
-            gamma=0, subsample=0.8, colsample_bytree=0.8, objective="binary:logistic"
-        )
-        self.model_name = "Xgboost"
+# class Xgboost(PredictModel):
+#     '''
+#         waiting for that the package installed successfully.
+#     '''
+#
+#     def __init__(self):
+#         PredictModel.__init__(self)
+#         self.classifier = XGBClassifier(
+#             learning_rate=0.1, n_estimators=140, max_depth=5, min_child_weight=1,
+#             gamma=0, subsample=0.8, colsample_bytree=0.8, objective="binary:logistic"
+#         )
+#         self.model_name = "Xgboost"
 
 
 class RandomForest(PredictModel):
@@ -283,7 +251,8 @@ class RandomForest(PredictModel):
         feature_impt = self.classifier.feature_importances_
         indices = np.argsort(feature_impt)[::-1]
         # feature_impt.sort(key = lambda x: x[0], reverse=True)
-        return ["RandomForest"] + ["{:s}({:.6f})".format(self.titles[indices[f]], feature_impt[indices[f]]) for f in range(feature_impt.shape[0])]
+        return ["RandomForest"] + ["{:s}({:.6f})".format(self.features[indices[f]], feature_impt[indices[f]]) for f in
+                                   range(feature_impt.shape[0])]
 
 
 class GBDT(PredictModel):
@@ -297,8 +266,8 @@ class GBDT(PredictModel):
 
     def feature_select(self):
         feature_impt = [(cf, i) for i, cf in enumerate(self.classifier.feature_importances_)]
-        feature_impt.sort(key = lambda x: x[0], reverse=True)
-        return ["GBDT"] + ["{:s}({:.6f})".format(self.titles[ind[1]], ind[0]) for ind in feature_impt]
+        feature_impt.sort(key=lambda x: x[0], reverse=True)
+        return ["GBDT"] + ["{:s}({:.6f})".format(self.features[ind[1]], ind[0]) for ind in feature_impt]
 
 
 class KNN(PredictModel):
@@ -337,11 +306,13 @@ def model_para_tune(mut_analyse_file, models_tuned_parameters, scores, model_arr
         classifiers.append(clf)
     return classifiers
 
+
 def evaluate_model(classifiers):
     scores = []
     for clf in classifiers:
         scores.append(clf.evaluate(clf.dataset, clf.labels))
     return scores
+
 
 def chara_im_assess_by_ml(classifiers, valid_modelnames, mutation_sort_file):
     feat_matrix = []
@@ -355,15 +326,16 @@ def chara_im_assess_by_ml(classifiers, valid_modelnames, mutation_sort_file):
             f1.write("\t".join(line) + "\n")
     return feat_matrix
 
+
 def visualize(x, y, model_array, xlabel, ylabel, outputFile):
     plt.figure()
     for i in range(len(model_array)):
-        plt.plot(x, y[i], label = model_array[i])
+        plt.plot(x, y[i], label=model_array[i])
     plt.title("Accuracy Curve of ml_model")
     plt.legend(loc="upper right")
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
-    plt.grid(True, linestyle = ":")
+    plt.grid(True, linestyle=":")
     plt.show()
     plt.savefig(outputFile)
     y = list(zip(*y))
@@ -372,6 +344,7 @@ def visualize(x, y, model_array, xlabel, ylabel, outputFile):
             f1.write("\t".join([str(x[ind])] + [str(m) for m in y[ind]]) + "\n")
     return True
 
+
 def find_common(mutation_sort_file, mutation_sort_file_by_common):
     matrix = []
     with open(mutation_sort_file, "r") as f1:
@@ -379,19 +352,20 @@ def find_common(mutation_sort_file, mutation_sort_file_by_common):
             if lineno >= 1:
                 matrix.append([ele.split("(")[0] for ele in line.strip("\n").split("\t")])
     total_feature_nums, match_dict, model_nums = len(matrix), {}, len(matrix[0])
-    for common_totals in range(1, total_feature_nums+1):
+    for common_totals in range(1, total_feature_nums + 1):
         common_set = set([line[0] for line in matrix[:common_totals]])
         for j in range(1, model_nums):
             common_set &= set([line[j] for line in matrix[:common_totals]])
         for feature in common_set:
             if feature not in match_dict:
                 match_dict[feature] = common_totals
-    sort_by_commonNums = sorted([[key, str(value)] for key, value in match_dict.items()], key=lambda x:int(x[1]))
+    sort_by_commonNums = sorted([[key, str(value)] for key, value in match_dict.items()], key=lambda x: int(x[1]))
     with open(mutation_sort_file_by_common, "w") as f2:
         f2.write("Feature\tUnique_common_nums\n")
         for line in sort_by_commonNums:
-            f2.write("\t".join(line)+"\n")
+            f2.write("\t".join(line) + "\n")
     return True
+
 
 def estimate_roughly(model_array, mut_dataset_file, directory):
     # Determine the threshold range of correlation scores.
@@ -410,12 +384,12 @@ def estimate_roughly(model_array, mut_dataset_file, directory):
     paras, scores, valid_models = pm._hyper_paras, pm._scores, pm._valid_modelnames
     feat_screen_by_model = os.path.join(directory, "feat_screen_by_model.table")
     x, y = [], [[] for _ in range(len(model_array))]
-    i = int(min_score*100)
+    i = int(min_score * 100)
     while i < int(max_score * 100):
         st = datetime.now()
 
         score_thresh, x = i / 100.0, x + [i / 100.0]
-        clfs = model_para_tune(mut_dataset_file, paras, scores, model_array, "thresh", threshold = score_thresh)
+        clfs = model_para_tune(mut_dataset_file, paras, scores, model_array, "thresh", threshold=score_thresh)
         performs = evaluate_model(clfs)
         for j in range(len(model_array)):
             y[j].append(performs[j].mean())
@@ -433,9 +407,11 @@ def estimate_roughly(model_array, mut_dataset_file, directory):
     clfs = model_para_tune(mut_dataset_file, paras, scores, model_array, "thresh", threshold=score_thresh)
     chara_im_assess_by_ml(clfs, valid_models, feat_screen_by_model)
 
-    xlabel, ylabel, outputImg = "Threshold of Combined Score", "Accuracy", os.path.join(directory, "accuracy_trend_by_thresh.png")
+    xlabel, ylabel, outputImg = "Threshold of Combined Score", "Accuracy", os.path.join(directory,
+                                                                                        "accuracy_trend_by_thresh.png")
     visualize(x, y, model_array, xlabel, ylabel, outputImg)
     return feat_screen_by_model, outputImg
+
 
 def estimate_meticulously(model_array, mut_dataset_file, feat_screen_by_model, directory):
     if not os.path.exists(directory):
@@ -445,21 +421,21 @@ def estimate_meticulously(model_array, mut_dataset_file, feat_screen_by_model, d
 
     paras, scores, common_models = pm._assigned_hyper_paras_1, pm._scores, pm._commonModel_bottom
     x, y = [], [[] for _ in range(len(model_array))]
-    for i in range(1, upper+1):
+    for i in range(1, upper + 1):
         st = datetime.now()
 
         topNums, flag = i, True
         meta_model = PredictModel()
         meta_model.load_data(mut_dataset_file)
-        meta_model.dataset, meta_model.titles = meta_model.feature_reduction_sec(
-            meta_model.dataset, meta_model.titles, feat_screen_by_model, topNums, common_models
+        meta_model.entire_data, meta_model.features = meta_model.feature_reduction_sec(
+            meta_model.entire_data, meta_model.features, feat_screen_by_model, topNums, common_models
         )
-        feature_nums = meta_model.dataset.shape[1]
+        feature_nums = meta_model.entire_data.shape[1]
         if feature_nums <= 1 or (len(x) > 0 and feature_nums == x[-1]):
             continue
         else:
             clfs = model_para_tune(
-                mut_dataset_file, paras, scores, model_array, "count", feature_sort = feat_screen_by_model,
+                mut_dataset_file, paras, scores, model_array, "count", feature_sort=feat_screen_by_model,
                 topNums=topNums, commonModel_bottom=common_models
             )
             performs = evaluate_model(clfs)
@@ -472,7 +448,8 @@ def estimate_meticulously(model_array, mut_dataset_file, feat_screen_by_model, d
             i, feature_nums, str(ed - st).split(".")[0])
         )
 
-    xlabel, ylabel, outputImg = "Num of Remained Features", "Accuracy", os.path.join(directory, "accuracy_trend_by_count.png")
+    xlabel, ylabel, outputImg = "Num of Remained Features", "Accuracy", os.path.join(directory,
+                                                                                     "accuracy_trend_by_count.png")
     feat_sort_by_model = os.path.join(directory, "feature_sort_by_model.table")
     visualize(x, y, model_array, xlabel, ylabel, outputImg)
     find_common(feat_screen_by_model, feat_sort_by_model)
@@ -481,40 +458,23 @@ def estimate_meticulously(model_array, mut_dataset_file, feat_screen_by_model, d
 
 __end__ = "yes"
 
-
 if __name__ == "__main__":
     # print(__doc__)
-    mut_dataset_file = "D:\\Project_JY\\gastricCancer\\Data\\input_dataset\\pos\\datasetOfPathology_pos.table"
-    threshold = 1.40
-    output_dir_pos = "D:\\Project_JY\\gastricCancer\\Result\\who\\pos"
+    # mut_dataset_file = "D:\\Project_JY\\gastricCancer\\Data\\input_dataset\\pogs\\datasetOfPathology_pos.table"
+    # output_dir_pos = "D:\\Project_JY\\gastricCancer\\Result\\who\\pos"
 
-    # mut_analyse_file = "D:\\Project_JY\\gastricCancer\\Data\\mutation_identify\\datasetOfPathology.table"
-    # threshold = 1.11
-    # output_dir_gene = "D:\\Project_JY\\gastricCancer\\Result\\gene"
+    mut_analyse_file = "D:\\Project_JY\\gastricCancer\\Data\\input_dataset\\gene\\datasetOfPathology_who_gene.table"
+    output_dir_gene = "D:\\Project_JY\\gastricCancer\\Result\\who\\gene"
+    model_array = ["RandomForest"]
+    paras, scores, methods = pm._hyper_paras, ["accuracy"], "thresh"
+    bottom, n_feat, iters = 0, 200, 10
 
-    # model_array = ["LR", "SVM", "Decision_Tree", "Bernoulli_Bayes", "Xgboost", "RandomForest", "GBDT", "KNN", "ShallowNetwork"]
-    model_array = ["LR"]
+    # Extra part for debug
+    clf = eval("{}()".format(model_array[0]))
+    clf.load_data(mut_analyse_file, 'tz_who')
 
-    # feat_screen_by_model, img1 = estimate_roughly(model_array, mut_dataset_file, output_dir_pos)
-    # estimate_meticulously(model_array, mut_dataset_file, feat_screen_by_model, output_dir_pos)
-
-    ## Extra part for debug
-    # clf = LR()
-    # clf.load_data(mut_dataset_file)
-    paras, scores, method = {
-            "LR": {"penalty": ["l2"],
-                   "C": [i / 1000.0 for i in range(1, 1001)] + [i for i in range(2, 101)],
-                   "solver": ["lbfgs"],
-                   "multi_class": ["ovr", "multinomial"]
-                   },
-        }, ["accuracy"], "thresh"
-    bottom = 0
-    a = model_para_tune(mut_dataset_file, paras, scores, model_array, method, threshold=bottom)
-    # find_common(mutation_sort_file, mutation_sort_file_by_common)
-    # feat_set = {"OR52N1", "TMEM110", "TMEM110-MUSTN1", "AP2B1", "ANKRD12"}
-    # feature_select_index = [i for i in range(clf.titles.shape[0]) if clf.titles[i] in feat_set]
-    # filter_titles = clf.titles[feature_select_index]
-    # filter_dataset = clf.dataset[:, feature_select_index]
-    # a = np.sum(filter_dataset, axis=0, keepdims=True)
-
-
+    # sorted_infoGain, filted_ind = clf.featSort_byInfoGain(clf.char_X, clf.labels_Y)
+    # x_selected = clf.char_X[:, filted_ind[:n_feat]]
+    # feat_selected = clf.features[filted_ind[:n_feat]]
+    # clf.evaluate(x_selected, clf.labels_Y, clf.sample_weight)
+    # clf.param_tune(paras[model_array[0]], x_selected, clf.labels_Y, clf.sample_weight, scores)

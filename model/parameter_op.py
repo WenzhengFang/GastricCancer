@@ -64,7 +64,7 @@ _hyper_paras = {
 
 # Pattern 1 of stable hyperparameters used for grid search of nine model
 _assigned_hyper_paras_1 = {
-    "LR": {"penalty": ["l2"], "C": [0.339]},
+    "LR": {"penalty": ["l2"], "C": [100]},
     "SVM": {"gamma": [0.01], "C": [0.03], "kernel": ["linear"], "coef0": [0.0]},
     "Decision_Tree": {"max_leaf_nodes": [20], "min_impurity_split": [0.008]},
     "Bernoulli_Bayes": {"alpha": [0.01]},
